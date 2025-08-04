@@ -1,0 +1,37 @@
+[package]
+name = "slotmap-testing"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "flecs_example"
+path = "src/flecs_example.rs"
+
+[[bin]]
+name = "hecs_example"
+path = "src/hecs_example.rs"
+
+[[bin]]
+name = "sparsey_example"
+path = "src/sparsey_example.rs"
+
+[[bin]]
+name = "flax_example"
+path = "src/flax_example.rs"
+
+[[bin]]
+name = "bevy_ecs_example"
+path = "src/bevy_ecs_example.rs"
+
+[[bin]]
+name = "evenio_example"
+path = "src/evenio_example.rs"
+
+[dependencies]
+evenio = "*"
+flecs = "0.1"
+hecs = "0.10"
+hecs-hierarchy = "0.12"
+sparsey = "0.13"
+flax = { git = "https://github.com/ten3roberts/flax", rev = "2e0658e04523348d0d72a6bb3c0e24e3e00d839b" }
+bevy_ecs = "0.16"
