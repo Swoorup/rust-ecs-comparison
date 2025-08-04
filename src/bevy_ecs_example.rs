@@ -1,5 +1,6 @@
 #![allow(unused)]
 use bevy_ecs::prelude::*;
+use bevy_ecs::schedule::Schedule;
 use std::collections::{HashMap, VecDeque};
 
 // Macro to create type-safe entity handles
@@ -61,13 +62,13 @@ struct UsesDataset {
 #[relationship_target(relationship = UsesDataset)]
 struct DatasetSubscribers(Vec<Entity>);
 
-// Command system components
-#[derive(Component, Debug, Clone)]
+// Command system resources - global state
+#[derive(Resource, Debug, Clone)]
 struct CommandQueue {
     commands: VecDeque<Command>,
 }
 
-#[derive(Component, Debug, Clone)]
+#[derive(Resource, Debug, Clone)]
 struct CreatedPanes {
     panes: Vec<(Vec<DatasetId>, PaneHandle)>,
 }
@@ -79,6 +80,49 @@ pub enum Command {
     DeletePane { pane: PaneHandle },
 }
 
+// System-compatible pane creation
+fn create_pane_with_datasets_system(
+    commands: &mut Commands,
+    dataset_ids: Vec<DatasetId>,
+    datasets_query: &Query<(Entity, &DatasetId)>,
+) -> PaneHandle {
+    // Create the pane entity
+    let pane = commands
+        .spawn(Pane {
+            width: 100,
+            height: 200,
+        })
+        .id();
+    let pane_handle = PaneHandle::new(pane);
+
+    for dataset_id in dataset_ids {
+        // Find existing dataset by querying all datasets
+        let mut existing_dataset = None;
+        for (entity, id) in datasets_query.iter() {
+            if *id == dataset_id {
+                existing_dataset = Some(DatasetHandle::new(entity));
+                break;
+            }
+        }
+
+        let dataset_handle = if let Some(existing) = existing_dataset {
+            existing
+        } else {
+            // Create new dataset entity
+            let dataset_entity = commands.spawn(dataset_id).id();
+            DatasetHandle::new(dataset_entity)
+        };
+
+        // Create the relationships using Bevy's relationship system
+        commands.entity(pane).insert(UsesDataset {
+            dataset: dataset_handle.entity(),
+        });
+    }
+
+    pane_handle
+}
+
+// Legacy function for non-system usage
 fn create_pane_with_datasets(world: &mut World, dataset_ids: Vec<DatasetId>) -> PaneHandle {
     // Create the pane entity
     let pane = world
@@ -129,50 +173,51 @@ fn get_panes_for_dataset(world: &World, dataset: DatasetHandle) -> Vec<PaneHandl
     subscribing_panes
 }
 
-// Command processing system
-fn process_commands_system(world: &mut World, command_entity: Entity) {
+// Command processing system - proper Bevy system function
+fn process_commands_system(
+    mut commands: Commands,
+    mut command_queue: ResMut<CommandQueue>,
+    mut created_panes: ResMut<CreatedPanes>,
+    datasets_query: Query<(Entity, &DatasetId)>,
+) {
     // Get and process all pending commands
-    let commands: Vec<Command> = {
-        let mut queue = world.get_mut::<CommandQueue>(command_entity).unwrap();
-        queue.commands.drain(..).collect()
-    };
+    let pending_commands: Vec<Command> = command_queue.commands.drain(..).collect();
 
     // Process commands and collect results
     let mut new_panes = Vec::new();
     let mut deleted_panes = Vec::new();
 
-    for cmd in commands {
+    for cmd in pending_commands {
         match cmd {
             Command::CreatePaneWithDatasets { dataset_ids } => {
                 println!(
                     "[System] Processing CreatePaneWithDatasets command with {} datasets",
                     dataset_ids.len()
                 );
-                let pane_handle = create_pane_with_datasets(world, dataset_ids.clone());
+                let pane_handle = create_pane_with_datasets_system(&mut commands, dataset_ids.clone(), &datasets_query);
                 new_panes.push((dataset_ids, pane_handle));
                 println!("[System] Created pane: {:?}", pane_handle);
             }
             Command::DeletePane { pane } => {
                 println!("[System] Processing DeletePane command for {:?}", pane);
-                world.despawn(pane.entity());
+                commands.entity(pane.entity()).despawn();
                 deleted_panes.push(pane);
             }
         }
     }
 
     // Update created_panes tracking after processing
-    let mut created = world.get_mut::<CreatedPanes>(command_entity).unwrap();
     for new_pane in new_panes {
-        created.panes.push(new_pane);
+        created_panes.panes.push(new_pane);
     }
     for deleted_pane in deleted_panes {
-        created.panes.retain(|(_, h)| *h != deleted_pane);
+        created_panes.panes.retain(|(_, h)| *h != deleted_pane);
     }
 }
 
-// Helper to enqueue commands
-fn enqueue_command(world: &mut World, command_entity: Entity, cmd: Command) {
-    let mut queue = world.get_mut::<CommandQueue>(command_entity).unwrap();
+// Helper to enqueue commands using resources
+fn enqueue_command(world: &mut World, cmd: Command) {
+    let mut queue = world.resource_mut::<CommandQueue>();
     queue.commands.push_back(cmd);
 }
 
@@ -203,15 +248,15 @@ pub fn main() {
     // Create a new bevy_ecs world
     let mut world = World::new();
 
-    // Create command queue entity
-    let command_entity = world
-        .spawn((
-            CommandQueue {
-                commands: VecDeque::new(),
-            },
-            CreatedPanes { panes: Vec::new() },
-        ))
-        .id();
+    // Initialize resources instead of components
+    world.insert_resource(CommandQueue {
+        commands: VecDeque::new(),
+    });
+    world.insert_resource(CreatedPanes { panes: Vec::new() });
+    
+    // Create a schedule with our system
+    let mut schedule = Schedule::default();
+    schedule.add_systems(process_commands_system);
 
     println!("=== Command-Based Pane Creation Demo ===\n");
 
@@ -219,7 +264,6 @@ pub fn main() {
     println!("Enqueueing commands...");
     enqueue_command(
         &mut world,
-        command_entity,
         Command::CreatePaneWithDatasets {
             dataset_ids: vec![
                 DatasetId("temperature_sensor_1"),
@@ -230,7 +274,6 @@ pub fn main() {
 
     enqueue_command(
         &mut world,
-        command_entity,
         Command::CreatePaneWithDatasets {
             dataset_ids: vec![DatasetId("humidity_sensor_1")],
         },
@@ -238,7 +281,6 @@ pub fn main() {
 
     enqueue_command(
         &mut world,
-        command_entity,
         Command::CreatePaneWithDatasets {
             dataset_ids: vec![
                 DatasetId("temperature_sensor_1"),
@@ -249,14 +291,10 @@ pub fn main() {
 
     // Process commands through the system
     println!("\nExecuting command processing system...\n");
-    process_commands_system(&mut world, command_entity);
+    schedule.run(&mut world);
 
     // Get created panes from the command system
-    let created = world
-        .get::<CreatedPanes>(command_entity)
-        .unwrap()
-        .panes
-        .clone();
+    let created = world.resource::<CreatedPanes>().panes.clone();
     let pane_handles: Vec<PaneHandle> = created.iter().map(|(_, h)| *h).collect();
 
     let pane1 = pane_handles[0];
@@ -296,13 +334,12 @@ pub fn main() {
     println!("Enqueueing delete command for pane 3...");
     enqueue_command(
         &mut world,
-        command_entity,
         Command::DeletePane { pane: pane3 },
     );
 
     // Process the delete command
     println!("Executing command processing system...\n");
-    process_commands_system(&mut world, command_entity);
+    schedule.run(&mut world);
 
     dump_subscriptions_by_dataset(&mut world);
 
@@ -344,12 +381,7 @@ pub fn main() {
         if entity.get::<DatasetSubscribers>().is_some() {
             components.push("DatasetSubscribers");
         }
-        if entity.get::<CommandQueue>().is_some() {
-            components.push("CommandQueue");
-        }
-        if entity.get::<CreatedPanes>().is_some() {
-            components.push("CreatedPanes");
-        }
+        // CommandQueue and CreatedPanes are now Resources, not Components
 
         println!("Components: {:?}", components);
     }
@@ -387,12 +419,14 @@ pub fn main() {
     println!(
         "- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types"
     );
-    println!("- COMMAND SYSTEM: Queue-based command processing with systems");
+    println!("- BEVY SYSTEMS: Proper system functions with Commands, Res, ResMut, Query parameters");
+    println!("- SCHEDULE INTEGRATION: System execution via Schedule.run() like real Bevy apps");
     println!(
         "- BUILT-IN RELATIONSHIPS: #[relationship] and #[relationship_target] for semantic connections"
     );
     println!("- Component definition using #[derive(Component)]");
-    println!("- Entity creation with .spawn() method");
+    println!("- Resources for global state with #[derive(Resource)]");
+    println!("- Entity creation with Commands.spawn() method");
     println!("- Query system with flexible component combinations");
     println!("- World introspection and archetype analysis");
     println!("- Automatic bidirectional relationship management");

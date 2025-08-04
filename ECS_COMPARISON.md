@@ -279,21 +279,31 @@ struct UsesDataset {
 #[relationship_target(relationship = UsesDataset)]
 struct DatasetSubscribers(Vec<Entity>);  // Automatically maintained by Bevy
 
-// Command system with modern Bevy patterns
-fn process_commands_system(world: &mut World, command_entity: Entity) {
-    let commands: Vec<Command> = { /* drain queue */ };
-    for cmd in commands {
+// Proper Bevy system with Schedule integration
+fn process_commands_system(
+    mut commands: Commands,
+    mut command_queue: ResMut<CommandQueue>,
+    mut created_panes: ResMut<CreatedPanes>,
+    datasets_query: Query<(Entity, &DatasetId)>,
+) {
+    let pending_commands: Vec<Command> = command_queue.commands.drain(..).collect();
+    for cmd in pending_commands {
         match cmd {
             Command::CreatePaneWithDatasets { dataset_ids } => {
-                let pane_handle = create_pane_with_datasets(world, dataset_ids);
+                let pane_handle = create_pane_with_datasets_system(&mut commands, dataset_ids, &datasets_query);
                 println!("[System] Created pane: {:?}", pane_handle);
             }
             Command::DeletePane { pane } => {
-                world.despawn(pane.entity());
+                commands.entity(pane.entity()).despawn();
             }
         }
     }
 }
+
+// System execution via Schedule.run()
+let mut schedule = Schedule::default();
+schedule.add_systems(process_commands_system);
+schedule.run(&mut world);
 
 // Type-safe entity creation
 fn create_pane_with_datasets(world: &mut World, dataset_ids: Vec<DatasetId>) -> PaneHandle {
@@ -324,9 +334,11 @@ fn get_panes_for_dataset(world: &World, dataset: DatasetHandle) -> Vec<PaneHandl
 
 **✅ Enhanced Pros:**
 - **Type-safe modern API** - #[derive(Component)] with handle validation
-- **Enhanced command system** - queue-based processing with Bevy patterns
+- **Proper Bevy systems** - Commands, ResMut, Query parameters like real Bevy apps
+- **Schedule integration** - System execution via Schedule.run() matching Bevy architecture
 - **Built-in relationship system** - #[relationship] and #[relationship_target] attributes
 - **Automatic bidirectional management** - DatasetSubscribers maintained automatically
+- **Resources for global state** - #[derive(Resource)] for command queues and tracking
 - **Industry standard patterns** - familiar to thousands of developers
 - **Excellent ecosystem** - plugins, tools, and community support
 
@@ -531,7 +543,7 @@ fn create_pane_with_datasets(
 | Feature | Flax Enhanced | Hecs+Hierarchy Enhanced | Bevy ECS Enhanced | Evenio Enhanced | Flecs Enhanced | Sparsey Enhanced |
 |---------|---------------|-------------------------|-------------------|-----------------|----------------|------------------|
 | **Type-safe handles** | ✅ Built-in macro | ✅ Built-in macro | ✅ Built-in macro | ✅ Built-in macro | ✅ Built-in macro | ✅ Built-in macro |
-| **Command system** | ✅ Schedule integration | ✅ Queue-based | ✅ Queue-based | ✅ Queue-based | 🟡 Simulated | 🟡 Simulated |
+| **Command system** | ✅ Schedule integration | ✅ Queue-based | ✅ Schedule integration | ✅ Queue-based | 🟡 Simulated | 🟡 Simulated |
 | **Modular components** | ✅ Modules | ❌ Flat | ❌ Flat | ❌ Flat | ❌ Flat | ❌ Groups only |
 | **Built-in relations** | ✅ First-class | 🟡 Hierarchy | ✅ #[relationship] | ❌ Vec<Handle> | ❌ Manual | ❌ Manual |
 | **Semantic queries** | ✅ `uses_dataset` | 🟡 Parent-child | ❌ Generic | ❌ Registry | ❌ Limited | ❌ Groups |
