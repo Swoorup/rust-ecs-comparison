@@ -1,5 +1,5 @@
 [package]
-name = "slotmap-testing"
+name = "rust-ecs-comparison"
 version = "0.1.0"
 edition = "2024"
 
