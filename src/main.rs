@@ -1,13 +1,15 @@
-use flax::*;
-use std::collections::HashMap;
 use colored::*;
-use rustyline::error::ReadlineError;
+use flax::*;
 use rustyline::Editor;
 use rustyline::completion::{Completer, Pair};
+use rustyline::config::{Config, EditMode};
+use rustyline::error::ReadlineError;
 use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
 use rustyline::hint::{Hinter, HistoryHinter};
 use rustyline::validate::{self, MatchingBracketValidator, Validator};
+use rustyline::{Cmd, KeyEvent};
 use rustyline::{Context, Helper};
+use std::collections::HashMap;
 
 component! {
     has_child(child): &'static str,
@@ -15,26 +17,9 @@ component! {
     health: i32,
 }
 
-#[derive(Debug, Clone)]
-enum ChangeType {
-    Added,
-    Modified,
-    Removed,
-}
-
-#[derive(Debug, Clone)]
-struct EntityChange {
-    entity: Entity,
-    name: String,
-    change_type: ChangeType,
-    timestamp: f64,
-}
-
 struct ReplState {
     world: World,
     entity_names: HashMap<String, Entity>,
-    changes: Vec<EntityChange>,
-    last_dump_time: f64,
 }
 
 struct MyHelper {
@@ -62,6 +47,21 @@ impl Hinter for MyHelper {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<String> {
+        // First try our custom completion hints
+        if let Ok((start, completions)) = self.completer.complete(line, pos, ctx) {
+            if !completions.is_empty() && start < pos {
+                let input_prefix = &line[start..pos];
+                let first_completion = &completions[0].replacement;
+
+                if first_completion.len() > input_prefix.len()
+                    && first_completion.starts_with(input_prefix)
+                {
+                    return Some(first_completion[input_prefix.len()..].to_string());
+                }
+            }
+        }
+
+        // Fall back to history hints
         self.hinter.hint(line, pos, ctx)
     }
 }
@@ -80,7 +80,8 @@ impl Highlighter for MyHelper {
     }
 
     fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
-        std::borrow::Cow::Owned(format!("\x1b[1m{}\x1b[m", hint))
+        // Use dim/gray color (ANSI code 90) for completion hints
+        std::borrow::Cow::Owned(format!("\x1b[90m{}\x1b[0m", hint))
     }
 
     fn highlight<'l>(&self, line: &'l str, pos: usize) -> std::borrow::Cow<'l, str> {
@@ -133,33 +134,35 @@ impl Completer for MyCompleter {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let commands = vec![
+        let base_commands = vec![
             "add entity",
             "get",
             "set-relation child",
             "set health",
+            "remove",
             "dump",
-            "dump added",
-            "dump modified", 
-            "dump removed",
             "list",
             "help",
             "quit",
             "exit",
         ];
 
+        let dump_subcommands = vec!["dump", "dump added", "dump modified", "dump removed"];
+
         let line_up_to_pos = &line[..pos];
         let parts: Vec<&str> = line_up_to_pos.split_whitespace().collect();
-        
+
         let mut candidates = Vec::new();
-        let start;
+        let mut start = pos;
 
         if parts.is_empty() || (parts.len() == 1 && !line_up_to_pos.ends_with(' ')) {
             // Complete command names
             let prefix = parts.first().map_or("", |v| v);
             start = pos - prefix.len();
-            
-            for cmd in &commands {
+
+            // Include base commands and dump sub-commands in initial completion
+            let all_commands = [&base_commands[..], &dump_subcommands[..]].concat();
+            for cmd in &all_commands {
                 if cmd.starts_with(prefix) {
                     candidates.push(Pair {
                         display: cmd.to_string(),
@@ -167,8 +170,57 @@ impl Completer for MyCompleter {
                     });
                 }
             }
-        } else {
-            // Complete entity names for relevant commands
+        } else if parts.len() == 1 && line_up_to_pos.ends_with(' ') {
+            // Handle completions after complete commands (like "dump ")
+            match parts[0] {
+                "dump" => {
+                    start = pos;
+                    for subcmd in &["added", "modified", "removed"] {
+                        candidates.push(Pair {
+                            display: subcmd.to_string(),
+                            replacement: subcmd.to_string(),
+                        });
+                    }
+                }
+                "set-relation" => {
+                    start = pos;
+                    candidates.push(Pair {
+                        display: "child".to_string(),
+                        replacement: "child".to_string(),
+                    });
+                }
+                "add" => {
+                    start = pos;
+                    candidates.push(Pair {
+                        display: "entity".to_string(),
+                        replacement: "entity".to_string(),
+                    });
+                }
+                _ => {}
+            }
+        } else if parts.len() == 2 && !line_up_to_pos.ends_with(' ') {
+            // Handle partial completions for second word
+            match parts[0] {
+                "dump" => {
+                    let partial = parts[1];
+                    start = pos - partial.len();
+                    for subcmd in &["added", "modified", "removed"] {
+                        if subcmd.starts_with(partial) {
+                            candidates.push(Pair {
+                                display: subcmd.to_string(),
+                                replacement: subcmd.to_string(),
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    // Fall through to existing entity completion logic below
+                }
+            }
+        }
+
+        // Handle entity name completions for commands that expect entity names
+        if candidates.is_empty() {
             match parts.as_slice() {
                 ["get", partial] if !line_up_to_pos.ends_with(' ') => {
                     start = pos - partial.len();
@@ -192,6 +244,17 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
+                ["remove", partial] if !line_up_to_pos.ends_with(' ') => {
+                    start = pos - partial.len();
+                    for entity in &self.entity_names {
+                        if entity.starts_with(partial) {
+                            candidates.push(Pair {
+                                display: entity.clone(),
+                                replacement: entity.clone(),
+                            });
+                        }
+                    }
+                }
                 ["set-relation", "child", partial] if !line_up_to_pos.ends_with(' ') => {
                     start = pos - partial.len();
                     for entity in &self.entity_names {
@@ -203,7 +266,9 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                ["set-relation", "child", _, "parent", partial] if !line_up_to_pos.ends_with(' ') => {
+                ["set-relation", "child", _, "parent", partial]
+                    if !line_up_to_pos.ends_with(' ') =>
+                {
                     start = pos - partial.len();
                     for entity in &self.entity_names {
                         if entity.starts_with(partial) {
@@ -214,9 +279,7 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                _ => {
-                    start = pos;
-                }
+                _ => {}
             }
         }
 
@@ -229,8 +292,6 @@ impl ReplState {
         Self {
             world: World::new(),
             entity_names: HashMap::new(),
-            changes: Vec::new(),
-            last_dump_time: 0.0,
         }
     }
 
@@ -247,13 +308,6 @@ impl ReplState {
 
         self.entity_names.insert(name.to_string(), entity);
 
-        self.changes.push(EntityChange {
-            entity,
-            name: name.to_string(),
-            change_type: ChangeType::Added,
-            timestamp,
-        });
-
         Ok(entity)
     }
 
@@ -268,24 +322,11 @@ impl ReplState {
         let entity = self.get_entity(name)?;
         let timestamp = self.get_current_time();
 
-        let is_new = self.world.get(entity, health()).is_err();
-
         self.world
             .set(entity, health(), health_value)
             .map_err(|e| format!("Failed to set health: {:?}", e))?;
 
         self.world.set(entity, last_modified(), timestamp).ok();
-
-        self.changes.push(EntityChange {
-            entity,
-            name: name.to_string(),
-            change_type: if is_new {
-                ChangeType::Added
-            } else {
-                ChangeType::Modified
-            },
-            timestamp,
-        });
 
         Ok(())
     }
@@ -306,19 +347,19 @@ impl ReplState {
         self.world.set(child, last_modified(), timestamp).ok();
         self.world.set(parent, last_modified(), timestamp).ok();
 
-        self.changes.push(EntityChange {
-            entity: child,
-            name: child_name.to_string(),
-            change_type: ChangeType::Modified,
-            timestamp,
-        });
+        Ok(())
+    }
 
-        self.changes.push(EntityChange {
-            entity: parent,
-            name: parent_name.to_string(),
-            change_type: ChangeType::Modified,
-            timestamp,
-        });
+    fn remove_entity(&mut self, name: &str) -> Result<(), String> {
+        let entity = self.get_entity(name)?;
+
+        // Remove the entity from the world (this will automatically clean up all components and relations)
+        self.world
+            .despawn(entity)
+            .map_err(|e| format!("Failed to remove entity: {:?}", e))?;
+
+        // Remove from our name lookup
+        self.entity_names.remove(name);
 
         Ok(())
     }
@@ -331,112 +372,199 @@ impl ReplState {
     }
 
     fn dump_changes(&mut self, filter: Option<&str>) {
-        let current_time = self.get_current_time();
-
-        let changes_to_dump: Vec<_> = self
-            .changes
-            .iter()
-            .filter(|c| c.timestamp > self.last_dump_time)
-            .filter(|c| match filter {
-                Some("added") => matches!(c.change_type, ChangeType::Added),
-                Some("modified") => matches!(c.change_type, ChangeType::Modified),
-                Some("removed") => matches!(c.change_type, ChangeType::Removed),
-                _ => true,
-            })
-            .cloned()
-            .collect();
-
-        if changes_to_dump.is_empty() {
-            println!("{}", "No changes to display".yellow());
-            return;
-        }
+        let mut found_changes = false;
 
         let title = match filter {
-            Some("added") => "=== Added Entities ===".green().bold(),
-            Some("modified") => "=== Modified Entities ===".blue().bold(),
-            Some("removed") => "=== Removed Entities ===".red().bold(),
+            Some("added") => "=== Added Components ===".green().bold(),
+            Some("modified") => "=== Modified Components ===".blue().bold(),
+            Some("removed") => "=== Removed Components ===".red().bold(),
             _ => "=== All Changes ===".cyan().bold(),
         };
 
         println!("\n{}", title);
 
-        for change in changes_to_dump {
-            let (change_type_str, _color) = match change.change_type {
-                ChangeType::Added => ("ADDED".green().bold(), "green"),
-                ChangeType::Modified => ("MODIFIED".blue().bold(), "blue"),
-                ChangeType::Removed => ("REMOVED".red().bold(), "red"),
-            };
+        match filter {
+            Some("added") => {
+                // Query for newly added components
+                Query::new((entity_ids(), components::name().added()))
+                    .borrow(&self.world)
+                    .for_each(|(entity, name)| {
+                        found_changes = true;
+                        println!(
+                            "  [{}] {} {} ({})",
+                            "ADDED NAME".green().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan()
+                        );
+                    });
 
-            println!(
-                "  [{}] {} {} ({})",
-                change_type_str, 
-                "Entity".white(),
-                format!("{:?}", change.entity).bright_magenta(),
-                change.name.bright_cyan()
-            );
-
-            if let Ok(health_val) = self.world.get(change.entity, health()) {
-                let health_color = if *health_val > 75 {
-                    format!("{}", *health_val).green()
-                } else if *health_val > 30 {
-                    format!("{}", *health_val).yellow()
-                } else {
-                    format!("{}", *health_val).red()
-                };
-                println!("    {} {}", "Health:".bright_black(), health_color);
+                Query::new((entity_ids(), components::name(), health().added()))
+                    .borrow(&self.world)
+                    .for_each(|(entity, name, health_val)| {
+                        found_changes = true;
+                        let health_color = if *health_val > 75 {
+                            format!("{}", *health_val).green()
+                        } else if *health_val > 30 {
+                            format!("{}", *health_val).yellow()
+                        } else {
+                            format!("{}", *health_val).red()
+                        };
+                        println!(
+                            "  [{}] {} {} ({}) - Health: {}",
+                            "ADDED HEALTH".green().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan(),
+                            health_color
+                        );
+                    });
             }
+            Some("modified") => {
+                // Query for modified components
+                Query::new((entity_ids(), components::name(), health().modified()))
+                    .borrow(&self.world)
+                    .for_each(|(entity, name, health_val)| {
+                        found_changes = true;
+                        let health_color = if *health_val > 75 {
+                            format!("{}", *health_val).green()
+                        } else if *health_val > 30 {
+                            format!("{}", *health_val).yellow()
+                        } else {
+                            format!("{}", *health_val).red()
+                        };
+                        println!(
+                            "  [{}] {} {} ({}) - Health: {}",
+                            "MODIFIED HEALTH".blue().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan(),
+                            health_color
+                        );
+                    });
 
-            if let Ok(child_of_relations) = Query::new(relations_like(components::child_of))
-                .with_relation(components::child_of)
-                .borrow(&self.world)
-                .get(change.entity)
-            {
-                let parents: Vec<String> = child_of_relations
-                    .map(|(parent, _)| {
-                        self.world
-                            .get(parent, components::name())
-                            .map(|n| n.clone())
-                            .unwrap_or_else(|_| format!("{:?}", parent))
-                    })
-                    .collect();
+                Query::new((entity_ids(), components::name(), last_modified().modified()))
+                    .borrow(&self.world)
+                    .for_each(|(entity, name, _timestamp)| {
+                        found_changes = true;
+                        println!(
+                            "  [{}] {} {} ({})",
+                            "MODIFIED".blue().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan()
+                        );
 
-                if !parents.is_empty() {
-                    println!("    {} {}", 
-                        "Parents:".bright_black(), 
-                        parents.join(", ").bright_yellow());
-                }
+                        // Show current relations
+                        self.display_entity_relations(entity);
+                    });
             }
+            Some("removed") => {
+                println!(
+                    "    {}",
+                    "Note: Removed component tracking not fully implemented yet".yellow()
+                );
+            }
+            _ => {
+                // Show all changes (added + modified)
+                Query::new((entity_ids(), components::name().added()))
+                    .borrow(&self.world)
+                    .for_each(|(entity, name)| {
+                        found_changes = true;
+                        println!(
+                            "  [{}] {} {} ({})",
+                            "ADDED".green().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan()
+                        );
+                    });
 
-            if let Ok(has_child_relations) = Query::new(relations_like(has_child))
-                .borrow(&self.world)
-                .get(change.entity)
-            {
-                let children: Vec<String> = has_child_relations
-                    .map(|(child, _): (Entity, &&str)| {
-                        self.world
-                            .get(child, components::name())
-                            .map(|n| n.clone())
-                            .unwrap_or_else(|_| format!("{:?}", child))
-                    })
-                    .collect();
-
-                if !children.is_empty() {
-                    println!("    {} {}", 
-                        "Children:".bright_black(), 
-                        children.join(", ").bright_green());
-                }
+                Query::new((entity_ids(), components::name(), health().modified()))
+                    .borrow(&self.world)
+                    .for_each(|(entity, name, health_val)| {
+                        found_changes = true;
+                        let health_color = if *health_val > 75 {
+                            format!("{}", *health_val).green()
+                        } else if *health_val > 30 {
+                            format!("{}", *health_val).yellow()
+                        } else {
+                            format!("{}", *health_val).red()
+                        };
+                        println!(
+                            "  [{}] {} {} ({}) - Health: {}",
+                            "MODIFIED".blue().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan(),
+                            health_color
+                        );
+                    });
             }
         }
 
-        self.last_dump_time = current_time;
+        if !found_changes {
+            println!("    {}", "No changes to display".yellow());
+        }
+
         println!("{}\n", "========================".bright_black());
+    }
+
+    fn display_entity_relations(&self, entity: Entity) {
+        // Show parent relationships
+        if let Ok(child_of_relations) = Query::new(relations_like(components::child_of))
+            .with_relation(components::child_of)
+            .borrow(&self.world)
+            .get(entity)
+        {
+            let parents: Vec<String> = child_of_relations
+                .map(|(parent, _)| {
+                    self.world
+                        .get(parent, components::name())
+                        .map(|n| n.clone())
+                        .unwrap_or_else(|_| format!("{:?}", parent))
+                })
+                .collect();
+
+            if !parents.is_empty() {
+                println!(
+                    "      {} {}",
+                    "Parents:".bright_black(),
+                    parents.join(", ").bright_yellow()
+                );
+            }
+        }
+
+        // Show child relationships
+        if let Ok(has_child_relations) = Query::new(relations_like(has_child))
+            .borrow(&self.world)
+            .get(entity)
+        {
+            let children: Vec<String> = has_child_relations
+                .map(|(child, _): (Entity, &&str)| {
+                    self.world
+                        .get(child, components::name())
+                        .map(|n| n.clone())
+                        .unwrap_or_else(|_| format!("{:?}", child))
+                })
+                .collect();
+
+            if !children.is_empty() {
+                println!(
+                    "      {} {}",
+                    "Children:".bright_black(),
+                    children.join(", ").bright_green()
+                );
+            }
+        }
     }
 
     fn get_entity_info(&self, name: &str) -> Result<String, String> {
         let entity = self.get_entity(name)?;
 
         let mut info = String::new();
-        info.push_str(&format!("{} {} ({})\n", 
+        info.push_str(&format!(
+            "{} {} ({})\n",
             "Entity:".white().bold(),
             name.bright_cyan().bold(),
             format!("{:?}", entity).bright_magenta()
@@ -450,7 +578,11 @@ impl ReplState {
             } else {
                 format!("{}", *health_val).red()
             };
-            info.push_str(&format!("  {} {}\n", "Health:".bright_black(), health_color));
+            info.push_str(&format!(
+                "  {} {}\n",
+                "Health:".bright_black(),
+                health_color
+            ));
         }
 
         if let Ok(child_of_relations) = Query::new(relations_like(components::child_of))
@@ -468,9 +600,11 @@ impl ReplState {
                 .collect();
 
             if !parents.is_empty() {
-                info.push_str(&format!("  {} {}\n", 
-                    "Parents:".bright_black(), 
-                    parents.join(", ").bright_yellow()));
+                info.push_str(&format!(
+                    "  {} {}\n",
+                    "Parents:".bright_black(),
+                    parents.join(", ").bright_yellow()
+                ));
             }
         }
 
@@ -488,9 +622,11 @@ impl ReplState {
                 .collect();
 
             if !children.is_empty() {
-                info.push_str(&format!("  {} {}\n", 
-                    "Children:".bright_black(), 
-                    children.join(", ").bright_green()));
+                info.push_str(&format!(
+                    "  {} {}\n",
+                    "Children:".bright_black(),
+                    children.join(", ").bright_green()
+                ));
             }
         }
 
@@ -500,28 +636,36 @@ impl ReplState {
 
 fn print_help() {
     println!("{}", "Available commands:".cyan().bold());
-    println!("  {} - Add a new entity with the given name", 
-        "add entity [name]".green());
-    println!("  {} - Get information about an entity", 
-        "get [name]".green());
-    println!("  {} - Create a parent-child relation", 
-        "set-relation child [name] parent [name]".green());
-    println!("  {} - Set health value for an entity", 
-        "set health [name] [number]".green());
-    println!("  {} - Show all recent changes", 
-        "dump".green());
-    println!("  {} - Show recently added entities", 
-        "dump added".green());
-    println!("  {} - Show recently modified entities", 
-        "dump modified".green());
-    println!("  {} - Show recently removed entities", 
-        "dump removed".green());
-    println!("  {} - List all entities", 
-        "list".green());
-    println!("  {} - Show this help message", 
-        "help".green());
-    println!("  {} - Exit the REPL", 
-        "quit".green());
+    println!(
+        "  {} - Add a new entity with the given name",
+        "add entity [name]".green()
+    );
+    println!(
+        "  {} - Get information about an entity",
+        "get [name]".green()
+    );
+    println!(
+        "  {} - Create a parent-child relation",
+        "set-relation child [name] parent [name]".green()
+    );
+    println!(
+        "  {} - Set health value for an entity",
+        "set health [name] [number]".green()
+    );
+    println!("  {} - Remove an entity", "remove [name]".green());
+    println!("  {} - Show all recent changes", "dump".green());
+    println!("  {} - Show recently added entities", "dump added".green());
+    println!(
+        "  {} - Show recently modified entities",
+        "dump modified".green()
+    );
+    println!(
+        "  {} - Show recently removed entities",
+        "dump removed".green()
+    );
+    println!("  {} - List all entities", "list".green());
+    println!("  {} - Show this help message", "help".green());
+    println!("  {} - Exit the REPL", "quit".green());
 }
 
 fn main() -> rustyline::Result<()> {
@@ -533,21 +677,41 @@ fn main() -> rustyline::Result<()> {
         validator: MatchingBracketValidator::new(),
         colored_prompt: format!("{} ", "►".bright_green().bold()),
     };
-    let mut rl = Editor::new()?;
+
+    let config = Config::builder()
+        .edit_mode(EditMode::Emacs)
+        .completion_type(rustyline::config::CompletionType::Circular)
+        .auto_add_history(true)
+        .build();
+
+    let mut rl = Editor::with_config(config)?;
     rl.set_helper(Some(h));
+
+    // Bind Command-E (Alt-E on some systems) to complete and move to end of line
+    rl.bind_sequence(KeyEvent::alt('e'), Cmd::CompleteHint);
+
+    // Also bind it to Ctrl-E for compatibility
+    rl.bind_sequence(KeyEvent::ctrl('E'), Cmd::CompleteHint);
 
     println!("{}", "╔═══════════════════════════╗".bright_magenta());
     println!("{}", "║     Flax ECS REPL v1.0   ║".bright_magenta().bold());
     println!("{}", "╚═══════════════════════════╝".bright_magenta());
     println!("{}\n", "Type 'help' for available commands".bright_black());
-    println!("{}", "Tab completion is available for commands and entity names!".bright_cyan());
+    println!(
+        "{}",
+        "Tab completion is available for commands and entity names!".bright_cyan()
+    );
+    println!(
+        "{}",
+        "Use Tab to cycle completions, Cmd-E/Ctrl-E for hint completion".bright_black()
+    );
 
     loop {
         // Update entity completion list
         if let Some(helper) = rl.helper_mut() {
             helper.completer.update_entities(&state.entity_names);
         }
-        
+
         let readline = rl.readline("► ");
         match readline {
             Ok(line) => {
@@ -564,86 +728,104 @@ fn main() -> rustyline::Result<()> {
                         println!("{}", "👋 Goodbye!".bright_cyan());
                         break;
                     }
-            ["help"] => {
-                print_help();
-            }
-            ["add", "entity", name] => match state.add_entity(name) {
-                Ok(entity) => {
-                    println!("{} Created entity '{}' with id {}", 
-                        "✓".green().bold(),
-                        name.bright_cyan(),
-                        format!("{:?}", entity).bright_magenta());
-                }
-                Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
-            },
-            ["get", name] => match state.get_entity_info(name) {
-                Ok(info) => print!("{}", info),
-                Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
-            },
-            ["set-relation", "child", child_name, "parent", parent_name] => {
-                match state.add_relation(child_name, parent_name) {
-                    Ok(_) => {
-                        println!("{} Created relation: {} {} {} {}", 
-                            "✓".green().bold(),
-                            child_name.bright_cyan(),
-                            "is child of".white(),
-                            parent_name.bright_yellow(),
-                            "🔗".bright_blue());
+                    ["help"] => {
+                        print_help();
                     }
-                    Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
-                }
-            }
-            ["set", "health", name, number_str] => match number_str.parse::<i32>() {
-                Ok(health_value) => match state.set_health(name, health_value) {
-                    Ok(_) => {
-                        let health_icon = if health_value > 75 {
-                            "💚"
-                        } else if health_value > 30 {
-                            "💛"
+                    ["add", "entity", name] => match state.add_entity(name) {
+                        Ok(entity) => {
+                            println!(
+                                "{} Created entity '{}' with id {}",
+                                "✓".green().bold(),
+                                name.bright_cyan(),
+                                format!("{:?}", entity).bright_magenta()
+                            );
+                        }
+                        Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
+                    },
+                    ["get", name] => match state.get_entity_info(name) {
+                        Ok(info) => print!("{}", info),
+                        Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
+                    },
+                    ["remove", name] => match state.remove_entity(name) {
+                        Ok(_) => {
+                            println!(
+                                "{} Removed entity '{}'",
+                                "✓".green().bold(),
+                                name.bright_cyan()
+                            );
+                        }
+                        Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
+                    },
+                    ["set-relation", "child", child_name, "parent", parent_name] => {
+                        match state.add_relation(child_name, parent_name) {
+                            Ok(_) => {
+                                println!(
+                                    "{} Created relation: {} {} {} {}",
+                                    "✓".green().bold(),
+                                    child_name.bright_cyan(),
+                                    "is child of".white(),
+                                    parent_name.bright_yellow(),
+                                    "🔗".bright_blue()
+                                );
+                            }
+                            Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
+                        }
+                    }
+                    ["set", "health", name, number_str] => match number_str.parse::<i32>() {
+                        Ok(health_value) => match state.set_health(name, health_value) {
+                            Ok(_) => {
+                                let health_icon = if health_value > 75 {
+                                    "💚"
+                                } else if health_value > 30 {
+                                    "💛"
+                                } else {
+                                    "❤️"
+                                };
+                                println!(
+                                    "{} Set health of '{}' to {} {}",
+                                    "✓".green().bold(),
+                                    name.bright_cyan(),
+                                    health_value.to_string().bright_green(),
+                                    health_icon
+                                );
+                            }
+                            Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
+                        },
+                        Err(_) => println!(
+                            "{} Invalid health value '{}', must be a number",
+                            "✗".red().bold(),
+                            number_str.red()
+                        ),
+                    },
+                    ["dump"] => {
+                        state.dump_changes(None);
+                    }
+                    ["dump", "added"] => {
+                        state.dump_changes(Some("added"));
+                    }
+                    ["dump", "modified"] => {
+                        state.dump_changes(Some("modified"));
+                    }
+                    ["dump", "removed"] => {
+                        state.dump_changes(Some("removed"));
+                    }
+                    ["list"] => {
+                        if state.entity_names.is_empty() {
+                            println!("{}", "No entities created yet".yellow());
                         } else {
-                            "❤️"
-                        };
-                        println!("{} Set health of '{}' to {} {}", 
-                            "✓".green().bold(),
-                            name.bright_cyan(),
-                            health_value.to_string().bright_green(),
-                            health_icon);
+                            println!("{}", "📋 Entities:".cyan().bold());
+                            for (name, entity) in &state.entity_names {
+                                println!(
+                                    "  {} {} ({})",
+                                    "•".bright_blue(),
+                                    name.bright_cyan(),
+                                    format!("{:?}", entity).bright_magenta()
+                                );
+                            }
+                        }
                     }
-                    Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
-                },
-                Err(_) => println!("{} Invalid health value '{}', must be a number", 
-                    "✗".red().bold(), 
-                    number_str.red()),
-            },
-            ["dump"] => {
-                state.dump_changes(None);
-            }
-            ["dump", "added"] => {
-                state.dump_changes(Some("added"));
-            }
-            ["dump", "modified"] => {
-                state.dump_changes(Some("modified"));
-            }
-            ["dump", "removed"] => {
-                state.dump_changes(Some("removed"));
-            }
-            ["list"] => {
-                if state.entity_names.is_empty() {
-                    println!("{}", "No entities created yet".yellow());
-                } else {
-                    println!("{}", "📋 Entities:".cyan().bold());
-                    for (name, entity) in &state.entity_names {
-                        println!("  {} {} ({})", 
-                            "•".bright_blue(),
-                            name.bright_cyan(),
-                            format!("{:?}", entity).bright_magenta());
-                    }
-                }
-            }
                     _ => {
-                        println!("{} Unknown command: '{}'", 
-                            "⚠".yellow().bold(), 
-                            input.red());
+                        println!("{} Unknown command: '{}'", "⚠".yellow().bold(), input.red());
                         println!("{}", "Type 'help' for available commands".bright_black());
                     }
                 }
