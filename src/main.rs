@@ -143,6 +143,7 @@ impl Completer for MyCompleter {
             "add entity",
             "get",
             "set-relation child",
+            "remove-relation child",
             "set health",
             "remove",
             "dump",
@@ -187,7 +188,7 @@ impl Completer for MyCompleter {
                         });
                     }
                 }
-                "set-relation" => {
+                "set-relation" | "remove-relation" => {
                     start = pos;
                     candidates.push(Pair {
                         display: "child".to_string(),
@@ -260,7 +261,8 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                ["set-relation", "child", partial] if !line_up_to_pos.ends_with(' ') => {
+                ["set-relation", "child", partial] | ["remove-relation", "child", partial] 
+                    if !line_up_to_pos.ends_with(' ') => {
                     start = pos - partial.len();
                     for entity in &self.entity_names {
                         if entity.starts_with(partial) {
@@ -271,7 +273,8 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                ["set-relation", "child", _, "parent", partial]
+                ["set-relation", "child", _, "parent", partial] | 
+                ["remove-relation", "child", _, "parent", partial]
                     if !line_up_to_pos.ends_with(' ') =>
                 {
                     start = pos - partial.len();
@@ -498,6 +501,27 @@ impl ReplState {
         Ok(())
     }
 
+    fn remove_relation(&mut self, child_name: &str, parent_name: &str) -> Result<(), String> {
+        let child = self.get_entity(child_name)?;
+        let parent = self.get_entity(parent_name)?;
+        let timestamp = self.get_current_time();
+
+        // Remove the child_of relation from the child
+        self.world
+            .remove(child, components::child_of(parent))
+            .map_err(|e| format!("Failed to remove child_of relation: {:?}", e))?;
+
+        // Remove the has_child relation from the parent
+        self.world
+            .remove(parent, has_child(child))
+            .map_err(|e| format!("Failed to remove has_child relation: {:?}", e))?;
+
+        self.world.set(child, last_modified(), timestamp).ok();
+        self.world.set(parent, last_modified(), timestamp).ok();
+
+        Ok(())
+    }
+
     fn remove_entity(&mut self, name: &str) -> Result<(), String> {
         let entity = self.get_entity(name)?;
 
@@ -707,6 +731,10 @@ fn print_help() {
         "set-relation child [name] parent [name]".green()
     );
     println!(
+        "  {} - Remove a parent-child relation",
+        "remove-relation child [name] parent [name]".green()
+    );
+    println!(
         "  {} - Set health value for an entity",
         "set health [name] [number]".green()
     );
@@ -829,6 +857,25 @@ fn main() -> rustyline::Result<()> {
                             Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
                         }
                     }
+                    [
+                        "remove-relation",
+                        "child",
+                        child_name,
+                        "parent",
+                        parent_name,
+                    ] => match state.remove_relation(child_name, parent_name) {
+                        Ok(_) => {
+                            println!(
+                                "{} Removed relation: {} {} {} {}",
+                                "✓".green().bold(),
+                                child_name.bright_cyan(),
+                                "is no longer child of".white(),
+                                parent_name.bright_yellow(),
+                                "✂️".red()
+                            );
+                        }
+                        Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
+                    },
                     ["set", "health", name, number_str] => match number_str.parse::<i32>() {
                         Ok(health_value) => match state.set_health(name, health_value) {
                             Ok(_) => {
