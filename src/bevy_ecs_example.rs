@@ -194,7 +194,11 @@ fn process_commands_system(
                     "[System] Processing CreatePaneWithDatasets command with {} datasets",
                     dataset_ids.len()
                 );
-                let pane_handle = create_pane_with_datasets_system(&mut commands, dataset_ids.clone(), &datasets_query);
+                let pane_handle = create_pane_with_datasets_system(
+                    &mut commands,
+                    dataset_ids.clone(),
+                    &datasets_query,
+                );
                 new_panes.push((dataset_ids, pane_handle));
                 println!("[System] Created pane: {:?}", pane_handle);
             }
@@ -253,7 +257,7 @@ pub fn main() {
         commands: VecDeque::new(),
     });
     world.insert_resource(CreatedPanes { panes: Vec::new() });
-    
+
     // Create a schedule with our system
     let mut schedule = Schedule::default();
     schedule.add_systems(process_commands_system);
@@ -332,10 +336,7 @@ pub fn main() {
     // Use command to delete pane 3
     println!("\n=== Demonstrating Command-Based Deletion ===");
     println!("Enqueueing delete command for pane 3...");
-    enqueue_command(
-        &mut world,
-        Command::DeletePane { pane: pane3 },
-    );
+    enqueue_command(&mut world, Command::DeletePane { pane: pane3 });
 
     // Process the delete command
     println!("Executing command processing system...\n");
@@ -419,7 +420,9 @@ pub fn main() {
     println!(
         "- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types"
     );
-    println!("- BEVY SYSTEMS: Proper system functions with Commands, Res, ResMut, Query parameters");
+    println!(
+        "- BEVY SYSTEMS: Proper system functions with Commands, Res, ResMut, Query parameters"
+    );
     println!("- SCHEDULE INTEGRATION: System execution via Schedule.run() like real Bevy apps");
     println!(
         "- BUILT-IN RELATIONSHIPS: #[relationship] and #[relationship_target] for semantic connections"

@@ -89,14 +89,12 @@ fn create_pane_with_datasets(
 
     // Create dataset entities (limited deduplication due to API limitations)
     let mut dataset_handles = Vec::new();
-    
+
     for dataset_id in dataset_ids {
         let dataset_handle = if let Some(&existing_handle) = created_datasets.get(&dataset_id) {
             existing_handle
         } else {
-            let dataset = world
-                .entity()
-                .set(dataset_id);
+            let dataset = world.entity().set(dataset_id);
             let dataset_handle = DatasetHandle::new(dataset);
             created_datasets.insert(dataset_id, dataset_handle);
             dataset_handle
@@ -113,15 +111,19 @@ fn create_pane_with_datasets(
     (pane_handle, dataset_handles)
 }
 
-fn get_panes_for_dataset(world: &World, dataset: DatasetHandle, all_panes: &[(PaneHandle, Vec<DatasetHandle>)]) -> Vec<PaneHandle> {
+fn get_panes_for_dataset(
+    world: &World,
+    dataset: DatasetHandle,
+    all_panes: &[(PaneHandle, Vec<DatasetHandle>)],
+) -> Vec<PaneHandle> {
     let mut subscribing_panes = Vec::new();
-    
+
     for &(pane_handle, ref dataset_handles) in all_panes {
         if dataset_handles.contains(&dataset) {
             subscribing_panes.push(pane_handle);
         }
     }
-    
+
     subscribing_panes
 }
 
@@ -136,12 +138,16 @@ fn process_commands_system(
     // Process commands and collect results
     let mut new_panes = Vec::new();
     let mut deleted_panes = Vec::new();
-    
+
     for cmd in commands.drain(..) {
         match cmd {
             Command::CreatePaneWithDatasets { dataset_ids } => {
-                println!("[System] Processing CreatePaneWithDatasets command with {} datasets", dataset_ids.len());
-                let (pane_handle, dataset_handles) = create_pane_with_datasets(world, dataset_ids.clone(), created_datasets);
+                println!(
+                    "[System] Processing CreatePaneWithDatasets command with {} datasets",
+                    dataset_ids.len()
+                );
+                let (pane_handle, dataset_handles) =
+                    create_pane_with_datasets(world, dataset_ids.clone(), created_datasets);
                 new_panes.push((dataset_ids.clone(), pane_handle));
                 all_pane_dataset_relations.push((pane_handle, dataset_handles));
                 println!("[System] Created pane: {:?}", pane_handle);
@@ -151,11 +157,13 @@ fn process_commands_system(
                 // Note: Due to API limitations, we can't actually despawn entities
                 // In a real implementation with full Flecs API, you would call world.delete(pane.entity())
                 deleted_panes.push(pane);
-                println!("[System] Note: Entity despawn not supported in current Flecs Rust bindings");
+                println!(
+                    "[System] Note: Entity despawn not supported in current Flecs Rust bindings"
+                );
             }
         }
     }
-    
+
     // Update tracking after processing
     for new_pane in new_panes {
         created_panes.push(new_pane);
@@ -183,7 +191,8 @@ fn dump_subscriptions_by_dataset(
         println!("  Handle: {:?}", dataset_handle);
 
         // Use the dedicated function to get panes for this dataset
-        let subscribing_panes = get_panes_for_dataset(&World::new(), dataset_handle, all_pane_dataset_relations);
+        let subscribing_panes =
+            get_panes_for_dataset(&World::new(), dataset_handle, all_pane_dataset_relations);
 
         if !subscribing_panes.is_empty() {
             println!(
@@ -214,41 +223,52 @@ pub fn main() {
 
     // Create some panes with datasets - simplified due to API limitations
     println!("=== Command-Based Pane Creation Demo ===\n");
-    println!("Note: Flecs Rust bindings are extremely limited - this is an enhanced demonstration within constraints");
-    
+    println!(
+        "Note: Flecs Rust bindings are extremely limited - this is an enhanced demonstration within constraints"
+    );
+
     // Enqueue commands instead of direct creation
     println!("Enqueueing commands...");
-    enqueue_command(&mut command_queue, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![
-            DatasetId("temperature_sensor_1"),
-            DatasetId("humidity_sensor_1"),
-        ],
-    });
-    
-    enqueue_command(&mut command_queue, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![DatasetId("humidity_sensor_1")],
-    });
-    
-    enqueue_command(&mut command_queue, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![
-            DatasetId("temperature_sensor_1"),
-            DatasetId("pressure_sensor_1"),
-        ],
-    });
-    
+    enqueue_command(
+        &mut command_queue,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![
+                DatasetId("temperature_sensor_1"),
+                DatasetId("humidity_sensor_1"),
+            ],
+        },
+    );
+
+    enqueue_command(
+        &mut command_queue,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![DatasetId("humidity_sensor_1")],
+        },
+    );
+
+    enqueue_command(
+        &mut command_queue,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![
+                DatasetId("temperature_sensor_1"),
+                DatasetId("pressure_sensor_1"),
+            ],
+        },
+    );
+
     // Process commands through the system
     println!("\nExecuting command processing system...\n");
     process_commands_system(
-        &world, 
-        &mut command_queue, 
-        &mut created_datasets, 
+        &world,
+        &mut command_queue,
+        &mut created_datasets,
         &mut created_panes,
-        &mut all_pane_dataset_relations
+        &mut all_pane_dataset_relations,
     );
-    
+
     // Get created panes from the command system
     let pane_handles: Vec<PaneHandle> = created_panes.iter().map(|(_, h)| *h).collect();
-    
+
     let pane1 = pane_handles[0];
     let pane2 = pane_handles[1];
     let pane3 = pane_handles[2];
@@ -269,15 +289,15 @@ pub fn main() {
     println!("\n=== Demonstrating Command-Based Deletion ===");
     println!("Enqueueing delete command for pane 3...");
     enqueue_command(&mut command_queue, Command::DeletePane { pane: pane3 });
-    
+
     // Process the delete command
     println!("Executing command processing system...\n");
     process_commands_system(
-        &world, 
-        &mut command_queue, 
-        &mut created_datasets, 
+        &world,
+        &mut command_queue,
+        &mut created_datasets,
         &mut created_panes,
-        &mut all_pane_dataset_relations
+        &mut all_pane_dataset_relations,
     );
 
     dump_subscriptions_by_dataset(&created_datasets, &all_pane_dataset_relations);
@@ -285,27 +305,40 @@ pub fn main() {
     // Print world statistics
     println!("\n=== World Statistics ===");
     println!("Note: Flecs Rust bindings are extremely limited");
-    
+
     println!("Entities with Pane component: {}", created_panes.len());
-    println!("Entities with DatasetId component: {}", created_datasets.len());
-    println!("Total tracked entities: {}", created_panes.len() + created_datasets.len());
+    println!(
+        "Entities with DatasetId component: {}",
+        created_datasets.len()
+    );
+    println!(
+        "Total tracked entities: {}",
+        created_panes.len() + created_datasets.len()
+    );
 
     // List all entities and their components
     println!("\n=== All Tracked Entities ===");
-    
+
     // List pane entities
     for &(ref dataset_ids, pane_handle) in &created_panes {
-        println!("Entity {:?}: Components: [\"Pane\", \"PaneDatasets\"]", pane_handle.entity());
+        println!(
+            "Entity {:?}: Components: [\"Pane\", \"PaneDatasets\"]",
+            pane_handle.entity()
+        );
     }
-    
+
     // List dataset entities
     for (dataset_id, dataset_handle) in &created_datasets {
-        println!("Entity {:?}: Components: [\"DatasetId\"] (ID: {:?})", dataset_handle.entity(), dataset_id);
+        println!(
+            "Entity {:?}: Components: [\"DatasetId\"] (ID: {:?})",
+            dataset_handle.entity(),
+            dataset_id
+        );
     }
 
     // Demonstrate basic queries - simplified
     println!("\n=== Query Examples ===");
-    
+
     // Show all panes and their dimensions
     println!("All panes and their dimensions:");
     for &(_, pane_handle) in &created_panes {
@@ -313,7 +346,7 @@ pub fn main() {
         let pane = entity.get::<Pane>();
         println!("  Pane: {}x{}", pane.width, pane.height);
     }
-    
+
     // Show all datasets and their IDs
     println!("All datasets:");
     for (&dataset_id, _) in &created_datasets {
@@ -323,10 +356,12 @@ pub fn main() {
     // Demonstrate type safety - these would be compile errors:
     // let wrong_panes = get_panes_for_dataset(&world, pane1, &all_pane_dataset_relations); // Error: expected DatasetHandle, found PaneHandle
     // let mixed_handles: Vec<Entity> = vec![pane1.entity(), dataset1.entity()]; // Error: can't mix handle types
-    
+
     println!("\n=== Flecs Example Complete ===");
     println!("This demonstrates enhanced Flecs ECS functionality (within API constraints):");
-    println!("- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types");
+    println!(
+        "- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types"
+    );
     println!("- COMMAND SYSTEM: Queue-based command processing with systems");
     println!("- Component definition (Component trait auto-implemented)");
     println!("- Entity creation with .entity().set() pattern");

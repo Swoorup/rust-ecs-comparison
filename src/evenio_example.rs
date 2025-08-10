@@ -112,7 +112,13 @@ fn create_pane_with_datasets(
 ) -> PaneHandle {
     // Create the pane entity
     let pane_entity = world.spawn();
-    world.insert(pane_entity, Pane { width: 100, height: 200 });
+    world.insert(
+        pane_entity,
+        Pane {
+            width: 100,
+            height: 200,
+        },
+    );
     let pane_handle = PaneHandle::new(pane_entity);
 
     let mut dataset_handles = Vec::new();
@@ -120,7 +126,9 @@ fn create_pane_with_datasets(
     for dataset_id in dataset_ids {
         // Check if dataset already exists
         let existing_dataset = {
-            let lookup = world.get::<DatasetIdToDatasetEntityLookup>(dataset_lookup).unwrap();
+            let lookup = world
+                .get::<DatasetIdToDatasetEntityLookup>(dataset_lookup)
+                .unwrap();
             lookup.lookup.get(&dataset_id).cloned()
         };
 
@@ -131,9 +139,11 @@ fn create_pane_with_datasets(
             let dataset_entity = world.spawn();
             world.insert(dataset_entity, dataset_id.clone());
             let dataset_handle = DatasetHandle::new(dataset_entity);
-            
+
             // Update lookup
-            let mut lookup = world.get_mut::<DatasetIdToDatasetEntityLookup>(dataset_lookup).unwrap();
+            let mut lookup = world
+                .get_mut::<DatasetIdToDatasetEntityLookup>(dataset_lookup)
+                .unwrap();
             lookup.lookup.insert(dataset_id, dataset_handle);
             dataset_handle
         };
@@ -141,7 +151,12 @@ fn create_pane_with_datasets(
         dataset_handles.push(dataset_handle);
     }
 
-    world.insert(pane_entity, PaneDatasets { datasets: dataset_handles });
+    world.insert(
+        pane_entity,
+        PaneDatasets {
+            datasets: dataset_handles,
+        },
+    );
 
     // Add pane to the all_panes registry
     let mut all_panes = world.get_mut::<AllPanes>(pane_lookup).unwrap();
@@ -150,9 +165,13 @@ fn create_pane_with_datasets(
     pane_handle
 }
 
-fn get_panes_for_dataset(world: &World, dataset: DatasetHandle, pane_lookup: EntityId) -> Vec<PaneHandle> {
+fn get_panes_for_dataset(
+    world: &World,
+    dataset: DatasetHandle,
+    pane_lookup: EntityId,
+) -> Vec<PaneHandle> {
     let mut subscribing_panes = Vec::new();
-    
+
     let all_panes = world.get::<AllPanes>(pane_lookup).unwrap();
     for &pane_handle in &all_panes.panes {
         if let Some(pane_datasets) = world.get::<PaneDatasets>(pane_handle.entity()) {
@@ -161,7 +180,7 @@ fn get_panes_for_dataset(world: &World, dataset: DatasetHandle, pane_lookup: Ent
             }
         }
     }
-    
+
     subscribing_panes
 }
 
@@ -177,16 +196,24 @@ fn process_commands_system(
         let mut queue = world.get_mut::<CommandQueue>(command_entity).unwrap();
         queue.commands.drain(..).collect()
     };
-    
+
     // Process commands and collect results
     let mut new_panes = Vec::new();
     let mut deleted_panes = Vec::new();
-    
+
     for cmd in commands {
         match cmd {
             Command::CreatePaneWithDatasets { dataset_ids } => {
-                println!("[System] Processing CreatePaneWithDatasets command with {} datasets", dataset_ids.len());
-                let pane_handle = create_pane_with_datasets(world, dataset_ids.clone(), pane_lookup, dataset_lookup);
+                println!(
+                    "[System] Processing CreatePaneWithDatasets command with {} datasets",
+                    dataset_ids.len()
+                );
+                let pane_handle = create_pane_with_datasets(
+                    world,
+                    dataset_ids.clone(),
+                    pane_lookup,
+                    dataset_lookup,
+                );
                 new_panes.push((dataset_ids, pane_handle));
                 println!("[System] Created pane: {:?}", pane_handle);
             }
@@ -197,7 +224,7 @@ fn process_commands_system(
             }
         }
     }
-    
+
     // Update created_panes tracking after processing
     {
         let mut created = world.get_mut::<CreatedPanes>(command_entity).unwrap();
@@ -208,7 +235,7 @@ fn process_commands_system(
             created.panes.retain(|(_, h)| *h != *deleted_pane);
         }
     }
-    
+
     // Remove deleted panes from all_panes registry
     for deleted_pane in deleted_panes {
         let mut all_panes = world.get_mut::<AllPanes>(pane_lookup).unwrap();
@@ -226,7 +253,9 @@ fn dump_subscriptions_by_dataset(world: &World, dataset_lookup: EntityId, pane_l
     // Print all datasets and their subscriptions
     println!("\n=== Dataset Subscriptions ===");
 
-    let lookup = world.get::<DatasetIdToDatasetEntityLookup>(dataset_lookup).unwrap();
+    let lookup = world
+        .get::<DatasetIdToDatasetEntityLookup>(dataset_lookup)
+        .unwrap();
     for (&dataset_id, &dataset_handle) in &lookup.lookup {
         println!("Dataset: {:#?}", dataset_id);
         println!("  Handle: {:?}", dataset_handle);
@@ -257,7 +286,12 @@ pub fn main() {
 
     // Create command queue entity
     let command_entity = world.spawn();
-    world.insert(command_entity, CommandQueue { commands: VecDeque::new() });
+    world.insert(
+        command_entity,
+        CommandQueue {
+            commands: VecDeque::new(),
+        },
+    );
     world.insert(command_entity, CreatedPanes { panes: Vec::new() });
 
     let mut registry = AppRegistry {
@@ -268,35 +302,57 @@ pub fn main() {
     };
 
     println!("=== Command-Based Pane Creation Demo ===\n");
-    
+
     // Enqueue commands instead of direct creation
     println!("Enqueueing commands...");
-    enqueue_command(&mut registry.world, command_entity, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![
-            DatasetId("temperature_sensor_1"),
-            DatasetId("humidity_sensor_1"),
-        ],
-    });
-    
-    enqueue_command(&mut registry.world, command_entity, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![DatasetId("humidity_sensor_1")],
-    });
-    
-    enqueue_command(&mut registry.world, command_entity, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![
-            DatasetId("temperature_sensor_1"),
-            DatasetId("pressure_sensor_1"),
-        ],
-    });
-    
+    enqueue_command(
+        &mut registry.world,
+        command_entity,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![
+                DatasetId("temperature_sensor_1"),
+                DatasetId("humidity_sensor_1"),
+            ],
+        },
+    );
+
+    enqueue_command(
+        &mut registry.world,
+        command_entity,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![DatasetId("humidity_sensor_1")],
+        },
+    );
+
+    enqueue_command(
+        &mut registry.world,
+        command_entity,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![
+                DatasetId("temperature_sensor_1"),
+                DatasetId("pressure_sensor_1"),
+            ],
+        },
+    );
+
     // Process commands through the system
     println!("\nExecuting command processing system...\n");
-    process_commands_system(&mut registry.world, command_entity, pane_lookup, dataset_lookup);
-    
+    process_commands_system(
+        &mut registry.world,
+        command_entity,
+        pane_lookup,
+        dataset_lookup,
+    );
+
     // Get created panes from the command system
-    let created = registry.world.get::<CreatedPanes>(command_entity).unwrap().panes.clone();
+    let created = registry
+        .world
+        .get::<CreatedPanes>(command_entity)
+        .unwrap()
+        .panes
+        .clone();
     let pane_handles: Vec<PaneHandle> = created.iter().map(|(_, h)| *h).collect();
-    
+
     let pane1 = pane_handles[0];
     let pane2 = pane_handles[1];
     let pane3 = pane_handles[2];
@@ -310,10 +366,17 @@ pub fn main() {
         .panes
     {
         let pane = registry.world.get::<Pane>(pane_handle.entity()).unwrap();
-        let pane_datasets = registry.world.get::<PaneDatasets>(pane_handle.entity()).unwrap();
+        let pane_datasets = registry
+            .world
+            .get::<PaneDatasets>(pane_handle.entity())
+            .unwrap();
         println!("Pane Handle: {:?}", pane_handle);
         println!("  Width: {}, Height: {}", pane.width, pane.height);
-        println!("  Uses {} datasets: {:?}", pane_datasets.datasets.len(), pane_datasets.datasets);
+        println!(
+            "  Uses {} datasets: {:?}",
+            pane_datasets.datasets.len(),
+            pane_datasets.datasets
+        );
     }
 
     dump_subscriptions_by_dataset(&registry.world, dataset_lookup, pane_lookup);
@@ -321,22 +384,40 @@ pub fn main() {
     // Use command to delete pane 3
     println!("\n=== Demonstrating Command-Based Deletion ===");
     println!("Enqueueing delete command for pane 3...");
-    enqueue_command(&mut registry.world, command_entity, Command::DeletePane { pane: pane3 });
-    
+    enqueue_command(
+        &mut registry.world,
+        command_entity,
+        Command::DeletePane { pane: pane3 },
+    );
+
     // Process the delete command
     println!("Executing command processing system...\n");
-    process_commands_system(&mut registry.world, command_entity, pane_lookup, dataset_lookup);
+    process_commands_system(
+        &mut registry.world,
+        command_entity,
+        pane_lookup,
+        dataset_lookup,
+    );
 
     dump_subscriptions_by_dataset(&registry.world, dataset_lookup, pane_lookup);
 
     // Print world statistics
     println!("\n=== World Statistics ===");
-    
-    let all_panes = registry.world.get::<AllPanes>(registry.pane_lookup).unwrap();
+
+    let all_panes = registry
+        .world
+        .get::<AllPanes>(registry.pane_lookup)
+        .unwrap();
     println!("Entities with pane components: {}", all_panes.panes.len());
 
-    let lookup = registry.world.get::<DatasetIdToDatasetEntityLookup>(registry.dataset_lookup).unwrap();
-    println!("Entities with dataset_id component: {}", lookup.lookup.len());
+    let lookup = registry
+        .world
+        .get::<DatasetIdToDatasetEntityLookup>(registry.dataset_lookup)
+        .unwrap();
+    println!(
+        "Entities with dataset_id component: {}",
+        lookup.lookup.len()
+    );
 
     println!("Total entities: {}", registry.world.entities().len());
 
@@ -363,14 +444,14 @@ pub fn main() {
 
     // Demonstrate advanced queries
     println!("\n=== Query Examples ===");
-    
+
     // Query all panes and their dimensions
     println!("All panes and their dimensions:");
     for &pane_handle in &all_panes.panes {
         let pane = registry.world.get::<Pane>(pane_handle.entity()).unwrap();
         println!("  Pane: {}x{}", pane.width, pane.height);
     }
-    
+
     // Query all datasets and show their IDs
     println!("All datasets:");
     for (&dataset_id, _) in &lookup.lookup {
@@ -380,10 +461,12 @@ pub fn main() {
     // Demonstrate type safety - these would be compile errors:
     // let wrong_panes = get_panes_for_dataset(&registry.world, pane1, pane_lookup); // Error: expected DatasetHandle, found PaneHandle
     // let mixed_handles: Vec<EntityId> = vec![pane1.entity(), dataset1.entity()]; // Error: can't mix handle types
-    
+
     println!("\n=== Evenio Example Complete ===");
     println!("This demonstrates enhanced Evenio ECS functionality:");
-    println!("- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types");
+    println!(
+        "- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types"
+    );
     println!("- COMMAND SYSTEM: Queue-based command processing with systems");
     println!("- Component definition with derive macros");
     println!("- Entity creation with .spawn() method");

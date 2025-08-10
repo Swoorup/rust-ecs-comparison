@@ -1,6 +1,6 @@
 #![allow(unused)]
-use sparsey::*;
 use sparsey::component::GroupLayout;
+use sparsey::*;
 use std::collections::{HashMap, VecDeque};
 
 // Macro to create type-safe entity handles
@@ -94,10 +94,10 @@ impl SparseySim {
     fn new() -> Self {
         // Create a new sparsey world with separate component groups
         let mut layout = GroupLayout::default();
-        layout.add_group::<(Pane, DatasetId)>();  // Group 1: Panes with DatasetId (limited by Sparsey)
-        layout.add_group::<(DatasetSubscription, SubscriptionMarker)>();  // Group 2: Subscriptions with marker
+        layout.add_group::<(Pane, DatasetId)>(); // Group 1: Panes with DatasetId (limited by Sparsey)
+        layout.add_group::<(DatasetSubscription, SubscriptionMarker)>(); // Group 2: Subscriptions with marker
         // Note: CommandQueue and CreatedPanes require pairs, but we simulate them externally
-        
+
         let world = World::new(&layout);
 
         Self {
@@ -112,44 +112,51 @@ impl SparseySim {
     fn create_pane_with_datasets(&mut self, dataset_ids: Vec<DatasetId>) -> PaneHandle {
         // Due to Sparsey constraints, we simulate pane creation
         let pane_entity = self.world.create((
-            Pane { width: 100, height: 200 },
+            Pane {
+                width: 100,
+                height: 200,
+            },
             DatasetId("placeholder"), // Sparsey requires paired components in groups
         ));
         let pane_handle = PaneHandle::new(pane_entity);
 
         // Track dataset handles (simulated due to Sparsey limitations)
         let mut dataset_handles = Vec::new();
-        
+
         for dataset_id in &dataset_ids {
-            let dataset_handle = if let Some(&existing_handle) = self.created_datasets.get(dataset_id) {
-                existing_handle
-            } else {
-                // Create new dataset entity (simulated)
-                let dataset_entity = self.world.create((
-                    DatasetSubscription { pane_handles: Vec::new() },
-                    SubscriptionMarker,
-                ));
-                let dataset_handle = DatasetHandle::new(dataset_entity);
-                self.created_datasets.insert(*dataset_id, dataset_handle);
-                dataset_handle
-            };
+            let dataset_handle =
+                if let Some(&existing_handle) = self.created_datasets.get(dataset_id) {
+                    existing_handle
+                } else {
+                    // Create new dataset entity (simulated)
+                    let dataset_entity = self.world.create((
+                        DatasetSubscription {
+                            pane_handles: Vec::new(),
+                        },
+                        SubscriptionMarker,
+                    ));
+                    let dataset_handle = DatasetHandle::new(dataset_entity);
+                    self.created_datasets.insert(*dataset_id, dataset_handle);
+                    dataset_handle
+                };
 
             dataset_handles.push(dataset_handle);
         }
 
-        self.all_pane_dataset_relations.push((pane_handle, dataset_handles));
+        self.all_pane_dataset_relations
+            .push((pane_handle, dataset_handles));
         pane_handle
     }
 
     fn get_panes_for_dataset(&self, dataset: DatasetHandle) -> Vec<PaneHandle> {
         let mut subscribing_panes = Vec::new();
-        
+
         for &(pane_handle, ref dataset_handles) in &self.all_pane_dataset_relations {
             if dataset_handles.contains(&dataset) {
                 subscribing_panes.push(pane_handle);
             }
         }
-        
+
         subscribing_panes
     }
 
@@ -157,14 +164,17 @@ impl SparseySim {
         // Process commands and collect results
         let mut new_panes = Vec::new();
         let mut deleted_panes = Vec::new();
-        
+
         // Extract commands to avoid borrow conflict
         let commands: Vec<Command> = self.command_queue.drain(..).collect();
-        
+
         for cmd in commands {
             match cmd {
                 Command::CreatePaneWithDatasets { dataset_ids } => {
-                    println!("[System] Processing CreatePaneWithDatasets command with {} datasets", dataset_ids.len());
+                    println!(
+                        "[System] Processing CreatePaneWithDatasets command with {} datasets",
+                        dataset_ids.len()
+                    );
                     let pane_handle = self.create_pane_with_datasets(dataset_ids.clone());
                     new_panes.push((dataset_ids, pane_handle));
                     println!("[System] Created pane: {:?}", pane_handle);
@@ -177,14 +187,15 @@ impl SparseySim {
                 }
             }
         }
-        
+
         // Update tracking after processing
         for new_pane in new_panes {
             self.created_panes.push(new_pane);
         }
         for deleted_pane in deleted_panes {
             self.created_panes.retain(|(_, h)| *h != deleted_pane);
-            self.all_pane_dataset_relations.retain(|(h, _)| *h != deleted_pane);
+            self.all_pane_dataset_relations
+                .retain(|(h, _)| *h != deleted_pane);
         }
     }
 
@@ -220,8 +231,10 @@ pub fn main() {
     let mut sim = SparseySim::new();
 
     println!("=== Command-Based Pane Creation Demo ===\n");
-    println!("Note: Sparsey has constraints - this is an enhanced demonstration within those limits");
-    
+    println!(
+        "Note: Sparsey has constraints - this is an enhanced demonstration within those limits"
+    );
+
     // Enqueue commands instead of direct creation
     println!("Enqueueing commands...");
     sim.enqueue_command(Command::CreatePaneWithDatasets {
@@ -230,27 +243,27 @@ pub fn main() {
             DatasetId("humidity_sensor_1"),
         ],
     });
-    
+
     sim.enqueue_command(Command::CreatePaneWithDatasets {
         dataset_ids: vec![DatasetId("humidity_sensor_1")],
     });
-    
+
     sim.enqueue_command(Command::CreatePaneWithDatasets {
         dataset_ids: vec![
             DatasetId("temperature_sensor_1"),
             DatasetId("pressure_sensor_1"),
         ],
     });
-    
+
     // Process commands through the system
     println!("\nExecuting command processing system...\n");
     sim.process_commands_system();
-    
+
     // Get created panes from the command system
     let pane_handles: Vec<PaneHandle> = sim.created_panes.iter().map(|(_, h)| *h).collect();
-    
+
     let pane1 = pane_handles[0];
-    let pane2 = pane_handles[1]; 
+    let pane2 = pane_handles[1];
     let pane3 = pane_handles[2];
 
     // Since sparsey has a different API, let's create a demonstration
@@ -267,7 +280,7 @@ pub fn main() {
     println!("\n=== Demonstrating Command-Based Deletion ===");
     println!("Enqueueing delete command for pane 3...");
     sim.enqueue_command(Command::DeletePane { pane: pane3 });
-    
+
     // Process the delete command
     println!("Executing command processing system...\n");
     sim.process_commands_system();
@@ -277,52 +290,69 @@ pub fn main() {
     // Query entities with both Pane and DatasetId components (limited by Sparsey grouping)
     println!("\n=== Sparsey Group Queries ===");
     let mut pane_count = 0;
-    sim.world.for_each::<(&Pane, &DatasetId)>(|(pane, dataset_id)| {
-        pane_count += 1;
-        println!("Pane {}x{}, Dataset: {:#?}", 
-                 pane.width, pane.height, dataset_id);
-    });
+    sim.world
+        .for_each::<(&Pane, &DatasetId)>(|(pane, dataset_id)| {
+            pane_count += 1;
+            println!(
+                "Pane {}x{}, Dataset: {:#?}",
+                pane.width, pane.height, dataset_id
+            );
+        });
     println!("Found {} entities in Pane+DatasetId group", pane_count);
 
     // Query DatasetSubscription components
     let mut subscription_count = 0;
     sim.world.for_each::<&DatasetSubscription>(|subscription| {
         subscription_count += 1;
-        println!("{} tracked pane handles in subscription", 
-                 subscription.pane_handles.len());
+        println!(
+            "{} tracked pane handles in subscription",
+            subscription.pane_handles.len()
+        );
     });
 
     // Print world statistics
     println!("\n=== World Statistics ===");
     println!("Note: Sparsey has group-based constraints");
-    
+
     println!("Entities with Pane component: {}", sim.created_panes.len());
-    println!("Entities with DatasetId component: {}", sim.created_datasets.len());
-    println!("Total tracked entities: {}", sim.created_panes.len() + sim.created_datasets.len());
+    println!(
+        "Entities with DatasetId component: {}",
+        sim.created_datasets.len()
+    );
+    println!(
+        "Total tracked entities: {}",
+        sim.created_panes.len() + sim.created_datasets.len()
+    );
 
     // Count total entities by querying all components
     let mut total_pane_entities = 0;
     sim.world.for_each::<&Pane>(|_pane| {
         total_pane_entities += 1;
     });
-    
+
     let mut total_subscription_entities = 0;
     sim.world.for_each::<&DatasetSubscription>(|_sub| {
         total_subscription_entities += 1;
     });
-    
-    println!("Sparsey group entities with Pane component: {}", total_pane_entities);
-    println!("Sparsey group entities with DatasetSubscription component: {}", total_subscription_entities);
+
+    println!(
+        "Sparsey group entities with Pane component: {}",
+        total_pane_entities
+    );
+    println!(
+        "Sparsey group entities with DatasetSubscription component: {}",
+        total_subscription_entities
+    );
 
     // Demonstrate advanced queries (limited by Sparsey)
     println!("\n=== Query Examples ===");
-    
+
     // Query all panes and their dimensions
     println!("All panes and their dimensions:");
     for &(_, pane_handle) in &sim.created_panes {
         println!("  Pane: 100x200"); // Fixed due to constraints
     }
-    
+
     // Query all datasets and show their IDs
     println!("All datasets:");
     for (&dataset_id, _) in &sim.created_datasets {
@@ -335,9 +365,11 @@ pub fn main() {
 
     println!("\n=== Sparsey Example Complete ===");
     println!("This demonstrates enhanced Sparsey ECS functionality (within constraints):");
-    println!("- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types");
+    println!(
+        "- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types"
+    );
     println!("- COMMAND SYSTEM: Queue-based command processing with systems");
-    println!("- Entity creation with multiple components in groups");  
+    println!("- Entity creation with multiple components in groups");
     println!("- Querying entities by component combinations within groups");
     println!("- Group-based component organization for memory layout optimization");
     println!("");
@@ -345,6 +377,6 @@ pub fn main() {
     println!("- Components must be pre-organized in groups at world creation");
     println!("- Limited flexibility - hard to change component combinations");
     println!("- Complex setup - GroupLayout configuration required");
-    println!("- Group constraints limit dynamic entity composition"); 
+    println!("- Group constraints limit dynamic entity composition");
     println!("- Manual state management required due to API limitations");
 }

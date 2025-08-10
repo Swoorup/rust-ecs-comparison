@@ -85,18 +85,21 @@ fn create_pane_with_datasets(
     dataset_root: Entity,
 ) -> PaneHandle {
     // Create the pane entity and attach it as child of pane_root
-    let pane = world.attach_new::<Tree, _>(pane_root, (
-        Pane {
-            width: 100,
-            height: 200,
-        },
-    )).unwrap();
+    let pane = world
+        .attach_new::<Tree, _>(
+            pane_root,
+            (Pane {
+                width: 100,
+                height: 200,
+            },),
+        )
+        .unwrap();
     let pane_handle = PaneHandle::new(pane);
 
     for dataset_id in dataset_ids {
         // Find existing dataset by searching children of dataset_root
         let mut existing_dataset = None;
-        
+
         // Iterate through children of dataset_root to find matching dataset
         for child in world.children::<Tree>(dataset_root) {
             if let Ok(existing_id) = world.get::<&DatasetId>(child) {
@@ -106,15 +109,17 @@ fn create_pane_with_datasets(
                 }
             }
         }
-        
+
         let dataset_handle = if let Some(existing) = existing_dataset {
             existing
         } else {
             // Create new dataset entity as child of dataset_root
-            let dataset_entity = world.attach_new::<Tree, _>(dataset_root, (dataset_id,)).unwrap();
+            let dataset_entity = world
+                .attach_new::<Tree, _>(dataset_root, (dataset_id,))
+                .unwrap();
             DatasetHandle::new(dataset_entity)
         };
-        
+
         // Create relationship: attach pane as child of dataset to show "uses" relationship
         // This creates a many-to-many relationship through the hierarchy
         world.attach::<Tree>(pane, dataset_handle.entity()).unwrap();
@@ -136,7 +141,7 @@ fn get_panes_for_dataset(world: &World, dataset: DatasetHandle) -> Vec<PaneHandl
 
 // Command processing system
 fn process_commands_system(
-    world: &mut World, 
+    world: &mut World,
     command_entity: Entity,
     pane_root: Entity,
     dataset_root: Entity,
@@ -146,16 +151,20 @@ fn process_commands_system(
         let mut queue = world.get::<&mut CommandQueue>(command_entity).unwrap();
         queue.commands.drain(..).collect()
     };
-    
+
     // Process commands and collect results
     let mut new_panes = Vec::new();
     let mut deleted_panes = Vec::new();
-    
+
     for cmd in commands {
         match cmd {
             Command::CreatePaneWithDatasets { dataset_ids } => {
-                println!("[System] Processing CreatePaneWithDatasets command with {} datasets", dataset_ids.len());
-                let pane_handle = create_pane_with_datasets(world, dataset_ids.clone(), pane_root, dataset_root);
+                println!(
+                    "[System] Processing CreatePaneWithDatasets command with {} datasets",
+                    dataset_ids.len()
+                );
+                let pane_handle =
+                    create_pane_with_datasets(world, dataset_ids.clone(), pane_root, dataset_root);
                 new_panes.push((dataset_ids, pane_handle));
                 println!("[System] Created pane: {:?}", pane_handle);
             }
@@ -166,7 +175,7 @@ fn process_commands_system(
             }
         }
     }
-    
+
     // Update created_panes tracking after processing
     let mut created = world.get::<&mut CreatedPanes>(command_entity).unwrap();
     for new_pane in new_panes {
@@ -193,7 +202,8 @@ fn dump_subscriptions_by_dataset(world: &World, dataset_root: Entity) {
             println!("  Handle: {:?}", DatasetHandle::new(dataset_entity));
 
             // Use the dedicated function to get panes for this dataset
-            let subscribing_panes = get_panes_for_dataset(&world, DatasetHandle::new(dataset_entity));
+            let subscribing_panes =
+                get_panes_for_dataset(&world, DatasetHandle::new(dataset_entity));
 
             if !subscribing_panes.is_empty() {
                 println!(
@@ -218,40 +228,58 @@ pub fn main() {
 
     // Create command queue entity
     let command_entity = world.spawn((
-        CommandQueue { commands: VecDeque::new() },
+        CommandQueue {
+            commands: VecDeque::new(),
+        },
         CreatedPanes { panes: Vec::new() },
     ));
 
     println!("=== Command-Based Pane Creation Demo ===\n");
-    
+
     // Enqueue commands instead of direct creation
     println!("Enqueueing commands...");
-    enqueue_command(&mut world, command_entity, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![
-            DatasetId("temperature_sensor_1"),
-            DatasetId("humidity_sensor_1"),
-        ],
-    });
-    
-    enqueue_command(&mut world, command_entity, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![DatasetId("humidity_sensor_1")],
-    });
-    
-    enqueue_command(&mut world, command_entity, Command::CreatePaneWithDatasets {
-        dataset_ids: vec![
-            DatasetId("temperature_sensor_1"),
-            DatasetId("pressure_sensor_1"),
-        ],
-    });
-    
+    enqueue_command(
+        &mut world,
+        command_entity,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![
+                DatasetId("temperature_sensor_1"),
+                DatasetId("humidity_sensor_1"),
+            ],
+        },
+    );
+
+    enqueue_command(
+        &mut world,
+        command_entity,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![DatasetId("humidity_sensor_1")],
+        },
+    );
+
+    enqueue_command(
+        &mut world,
+        command_entity,
+        Command::CreatePaneWithDatasets {
+            dataset_ids: vec![
+                DatasetId("temperature_sensor_1"),
+                DatasetId("pressure_sensor_1"),
+            ],
+        },
+    );
+
     // Process commands through the system
     println!("\nExecuting command processing system...\n");
     process_commands_system(&mut world, command_entity, pane_root, dataset_root);
-    
+
     // Get created panes from the command system
-    let created = world.get::<&CreatedPanes>(command_entity).unwrap().panes.clone();
+    let created = world
+        .get::<&CreatedPanes>(command_entity)
+        .unwrap()
+        .panes
+        .clone();
     let pane_handles: Vec<PaneHandle> = created.iter().map(|(_, h)| *h).collect();
-    
+
     let pane1 = pane_handles[0];
     let pane2 = pane_handles[1];
     let pane3 = pane_handles[2];
@@ -263,7 +291,7 @@ pub fn main() {
             let pane_handle = PaneHandle::new(pane_entity);
             println!("Pane Handle: {:?}", pane_handle);
             println!("  Width: {}, Height: {}", pane.width, pane.height);
-            
+
             // Find datasets this pane uses by looking at which datasets have this pane as child
             let mut used_datasets = Vec::new();
             for dataset_entity in world.children::<Tree>(dataset_root) {
@@ -273,9 +301,13 @@ pub fn main() {
                     used_datasets.push(DatasetHandle::new(dataset_entity));
                 }
             }
-            
+
             if !used_datasets.is_empty() {
-                println!("  Uses {} datasets: {:?}", used_datasets.len(), used_datasets);
+                println!(
+                    "  Uses {} datasets: {:?}",
+                    used_datasets.len(),
+                    used_datasets
+                );
             } else {
                 println!("  Uses no datasets");
             }
@@ -287,8 +319,12 @@ pub fn main() {
     // Use command to delete pane 3
     println!("\n=== Demonstrating Command-Based Deletion ===");
     println!("Enqueueing delete command for pane 3...");
-    enqueue_command(&mut world, command_entity, Command::DeletePane { pane: pane3 });
-    
+    enqueue_command(
+        &mut world,
+        command_entity,
+        Command::DeletePane { pane: pane3 },
+    );
+
     // Process the delete command
     println!("Executing command processing system...\n");
     process_commands_system(&mut world, command_entity, pane_root, dataset_root);
@@ -297,7 +333,7 @@ pub fn main() {
 
     // Print world statistics
     println!("\n=== World Statistics ===");
-    
+
     // Count entities
     let entity_count = world.len();
     println!("Total entities: {}", entity_count);
@@ -321,22 +357,22 @@ pub fn main() {
     for entity in world.iter() {
         let entity_id = entity.entity();
         print!("Entity {:?}: ", entity_id);
-        
+
         // Check for each component type
         let mut components = Vec::new();
-        
+
         if entity.get::<&Pane>().is_some() {
             components.push("Pane");
         }
-        
+
         if entity.get::<&DatasetId>().is_some() {
             components.push("DatasetId");
         }
-        
+
         if entity.get::<&PaneRoot>().is_some() {
             components.push("PaneRoot");
         }
-        
+
         if entity.get::<&DatasetRoot>().is_some() {
             components.push("DatasetRoot");
         }
@@ -348,27 +384,29 @@ pub fn main() {
         if entity.get::<&CreatedPanes>().is_some() {
             components.push("CreatedPanes");
         }
-        
+
         // Show hierarchy information
         if let Ok(parent) = world.parent::<Tree>(entity_id) {
             components.push("HasParent");
         }
-        
+
         let children: Vec<_> = world.children::<Tree>(entity_id).collect();
         if !children.is_empty() {
             components.push("HasChildren");
         }
-        
+
         println!("Components: {:?}", components);
     }
 
     // Demonstrate type safety - these would be compile errors:
     // let wrong_panes = get_panes_for_dataset(&world, pane1); // Error: expected DatasetHandle, found PaneHandle
     // let mixed_handles: Vec<Entity> = vec![pane1, dataset1]; // Error: can't mix handle types
-    
+
     println!("\n=== Hecs Hierarchy Example Complete ===");
     println!("This demonstrates enhanced Hecs ECS with hecs-hierarchy functionality:");
-    println!("- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types");
+    println!(
+        "- TYPE-SAFE ENTITY HANDLES: PaneHandle and DatasetHandle prevent mixing entity types"
+    );
     println!("- COMMAND SYSTEM: Queue-based command processing with systems");
     println!("- Component definition with plain structs");
     println!("- Entity creation with .spawn() and .attach_new() methods");
