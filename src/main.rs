@@ -532,28 +532,31 @@ impl ReplState {
             }
             Some("modified") => {
                 self.modified_system.run(&mut self.world).unwrap();
-                // Also show relations for modified entities
-                self.show_relations_for_modified();
             }
             Some("removed") => {
                 self.removed_system.run(&mut self.world).unwrap();
             }
             _ => {
-                // Show all changes (added + modified)
-                self.added_system.run(&mut self.world).unwrap();
-                self.modified_system.run(&mut self.world).unwrap();
-                self.show_relations_for_modified();
+                self.show_relations();
             }
         }
 
         println!("{}\n", "========================".bright_black());
     }
 
-    fn show_relations_for_modified(&self) {
+    fn show_relations(&self) {
         // Show relations for entities that were modified via last_modified changes
-        Query::new((entity_ids(), components::name(), last_modified().modified()))
+        Query::new((entity_ids(), components::name()))
             .borrow(&self.world)
-            .for_each(|(entity, _name, _timestamp)| {
+            .for_each(|(entity, name)| {
+                // First print the entity
+                println!(
+                    "  {} {} ({})",
+                    "Entity".white(),
+                    name.bright_cyan(),
+                    format!("{:?}", entity).bright_magenta()
+                );
+                // Then show its relations
                 self.display_entity_relations(entity);
             });
     }
