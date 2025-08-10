@@ -1,4 +1,5 @@
 use colored::*;
+use flax::system::BoxedSystem;
 use flax::*;
 use rustyline::Editor;
 use rustyline::completion::{Completer, Pair};
@@ -20,6 +21,10 @@ component! {
 struct ReplState {
     world: World,
     entity_names: HashMap<String, Entity>,
+    // Systems for change detection
+    added_system: BoxedSystem,
+    modified_system: BoxedSystem,
+    removed_system: BoxedSystem,
 }
 
 struct MyHelper {
@@ -289,9 +294,149 @@ impl Completer for MyCompleter {
 
 impl ReplState {
     fn new() -> Self {
+        use flax::filter::ChangeFilter;
+        use flax::query::QueryBorrow;
+
+        // Create systems for change detection using the proper Flax System API
+        let added_system = System::builder()
+            .with_name("added_components")
+            .with_query(Query::new((entity_ids(), components::name().added())))
+            .with_query(Query::new((
+                entity_ids(),
+                components::name(),
+                health().added(),
+            )))
+            .build(
+                |mut name_query: QueryBorrow<(EntityIds, ChangeFilter<String>)>,
+                 mut health_query: QueryBorrow<(
+                    EntityIds,
+                    flax::Component<String>,
+                    ChangeFilter<i32>,
+                )>| {
+                    let mut found_changes = false;
+
+                    // Query for newly added name components
+                    for (entity, name) in name_query.iter() {
+                        found_changes = true;
+                        println!(
+                            "  [{}] {} {} ({})",
+                            "ADDED".green().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan()
+                        );
+                    }
+
+                    // Query for newly added health components
+                    for (entity, name, health_val) in health_query.iter() {
+                        found_changes = true;
+                        let health_color = if *health_val > 75 {
+                            format!("{}", *health_val).green()
+                        } else if *health_val > 30 {
+                            format!("{}", *health_val).yellow()
+                        } else {
+                            format!("{}", *health_val).red()
+                        };
+                        println!(
+                            "  [{}] {} {} ({}) - Health: {}",
+                            "ADDED HEALTH".green().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan(),
+                            health_color
+                        );
+                    }
+
+                    if !found_changes {
+                        println!("    {}", "No added components to display".yellow());
+                    }
+                    () // Explicitly return ()
+                },
+            )
+            .boxed();
+
+        let modified_system = System::builder()
+            .with_name("modified_components")
+            .with_query(Query::new((
+                entity_ids(),
+                components::name(),
+                health().modified(),
+            )))
+            .with_query(Query::new((
+                entity_ids(),
+                components::name(),
+                last_modified().modified(),
+            )))
+            .build(
+                |mut health_query: QueryBorrow<(
+                    EntityIds,
+                    flax::Component<String>,
+                    ChangeFilter<i32>,
+                )>,
+                 mut modified_query: QueryBorrow<(
+                    EntityIds,
+                    flax::Component<String>,
+                    ChangeFilter<f64>,
+                )>| {
+                    let mut found_changes = false;
+
+                    // Query for modified health components
+                    for (entity, name, health_val) in health_query.iter() {
+                        found_changes = true;
+                        let health_color = if *health_val > 75 {
+                            format!("{}", *health_val).green()
+                        } else if *health_val > 30 {
+                            format!("{}", *health_val).yellow()
+                        } else {
+                            format!("{}", *health_val).red()
+                        };
+                        println!(
+                            "  [{}] {} {} ({}) - Health: {}",
+                            "MODIFIED HEALTH".blue().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan(),
+                            health_color
+                        );
+                    }
+
+                    // Query for general modifications via last_modified
+                    for (entity, name, _timestamp) in modified_query.iter() {
+                        found_changes = true;
+                        println!(
+                            "  [{}] {} {} ({})",
+                            "MODIFIED".blue().bold(),
+                            "Entity".white(),
+                            format!("{:?}", entity).bright_magenta(),
+                            name.bright_cyan()
+                        );
+                    }
+
+                    if !found_changes {
+                        println!("    {}", "No modified components to display".yellow());
+                    }
+                    () // Explicitly return ()
+                },
+            )
+            .boxed();
+
+        let removed_system = System::builder()
+            .with_name("removed_components")
+            .build(|| {
+                println!(
+                    "    {}",
+                    "Note: Removed component tracking not fully implemented yet".yellow()
+                );
+                () // Explicitly return ()
+            })
+            .boxed();
+
         Self {
             world: World::new(),
             entity_names: HashMap::new(),
+            added_system,
+            modified_system,
+            removed_system,
         }
     }
 
@@ -372,8 +517,6 @@ impl ReplState {
     }
 
     fn dump_changes(&mut self, filter: Option<&str>) {
-        let mut found_changes = false;
-
         let title = match filter {
             Some("added") => "=== Added Components ===".green().bold(),
             Some("modified") => "=== Modified Components ===".blue().bold(),
@@ -385,129 +528,34 @@ impl ReplState {
 
         match filter {
             Some("added") => {
-                // Query for newly added components
-                Query::new((entity_ids(), components::name().added()))
-                    .borrow(&self.world)
-                    .for_each(|(entity, name)| {
-                        found_changes = true;
-                        println!(
-                            "  [{}] {} {} ({})",
-                            "ADDED NAME".green().bold(),
-                            "Entity".white(),
-                            format!("{:?}", entity).bright_magenta(),
-                            name.bright_cyan()
-                        );
-                    });
-
-                Query::new((entity_ids(), components::name(), health().added()))
-                    .borrow(&self.world)
-                    .for_each(|(entity, name, health_val)| {
-                        found_changes = true;
-                        let health_color = if *health_val > 75 {
-                            format!("{}", *health_val).green()
-                        } else if *health_val > 30 {
-                            format!("{}", *health_val).yellow()
-                        } else {
-                            format!("{}", *health_val).red()
-                        };
-                        println!(
-                            "  [{}] {} {} ({}) - Health: {}",
-                            "ADDED HEALTH".green().bold(),
-                            "Entity".white(),
-                            format!("{:?}", entity).bright_magenta(),
-                            name.bright_cyan(),
-                            health_color
-                        );
-                    });
+                self.added_system.run(&mut self.world).unwrap();
             }
             Some("modified") => {
-                // Query for modified components
-                Query::new((entity_ids(), components::name(), health().modified()))
-                    .borrow(&self.world)
-                    .for_each(|(entity, name, health_val)| {
-                        found_changes = true;
-                        let health_color = if *health_val > 75 {
-                            format!("{}", *health_val).green()
-                        } else if *health_val > 30 {
-                            format!("{}", *health_val).yellow()
-                        } else {
-                            format!("{}", *health_val).red()
-                        };
-                        println!(
-                            "  [{}] {} {} ({}) - Health: {}",
-                            "MODIFIED HEALTH".blue().bold(),
-                            "Entity".white(),
-                            format!("{:?}", entity).bright_magenta(),
-                            name.bright_cyan(),
-                            health_color
-                        );
-                    });
-
-                Query::new((entity_ids(), components::name(), last_modified().modified()))
-                    .borrow(&self.world)
-                    .for_each(|(entity, name, _timestamp)| {
-                        found_changes = true;
-                        println!(
-                            "  [{}] {} {} ({})",
-                            "MODIFIED".blue().bold(),
-                            "Entity".white(),
-                            format!("{:?}", entity).bright_magenta(),
-                            name.bright_cyan()
-                        );
-
-                        // Show current relations
-                        self.display_entity_relations(entity);
-                    });
+                self.modified_system.run(&mut self.world).unwrap();
+                // Also show relations for modified entities
+                self.show_relations_for_modified();
             }
             Some("removed") => {
-                println!(
-                    "    {}",
-                    "Note: Removed component tracking not fully implemented yet".yellow()
-                );
+                self.removed_system.run(&mut self.world).unwrap();
             }
             _ => {
                 // Show all changes (added + modified)
-                Query::new((entity_ids(), components::name().added()))
-                    .borrow(&self.world)
-                    .for_each(|(entity, name)| {
-                        found_changes = true;
-                        println!(
-                            "  [{}] {} {} ({})",
-                            "ADDED".green().bold(),
-                            "Entity".white(),
-                            format!("{:?}", entity).bright_magenta(),
-                            name.bright_cyan()
-                        );
-                    });
-
-                Query::new((entity_ids(), components::name(), health().modified()))
-                    .borrow(&self.world)
-                    .for_each(|(entity, name, health_val)| {
-                        found_changes = true;
-                        let health_color = if *health_val > 75 {
-                            format!("{}", *health_val).green()
-                        } else if *health_val > 30 {
-                            format!("{}", *health_val).yellow()
-                        } else {
-                            format!("{}", *health_val).red()
-                        };
-                        println!(
-                            "  [{}] {} {} ({}) - Health: {}",
-                            "MODIFIED".blue().bold(),
-                            "Entity".white(),
-                            format!("{:?}", entity).bright_magenta(),
-                            name.bright_cyan(),
-                            health_color
-                        );
-                    });
+                self.added_system.run(&mut self.world).unwrap();
+                self.modified_system.run(&mut self.world).unwrap();
+                self.show_relations_for_modified();
             }
         }
 
-        if !found_changes {
-            println!("    {}", "No changes to display".yellow());
-        }
-
         println!("{}\n", "========================".bright_black());
+    }
+
+    fn show_relations_for_modified(&self) {
+        // Show relations for entities that were modified via last_modified changes
+        Query::new((entity_ids(), components::name(), last_modified().modified()))
+            .borrow(&self.world)
+            .for_each(|(entity, _name, _timestamp)| {
+                self.display_entity_relations(entity);
+            });
     }
 
     fn display_entity_relations(&self, entity: Entity) {
