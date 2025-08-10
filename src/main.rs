@@ -13,7 +13,7 @@ use rustyline::{Context, Helper};
 use std::collections::HashMap;
 
 component! {
-    has_child(child): &'static str,
+    has_child(child): String,
     last_modified: f64,
     health: i32,
 }
@@ -485,8 +485,11 @@ impl ReplState {
             .set(child, components::child_of(parent), ())
             .map_err(|e| format!("Failed to set child_of relation: {:?}", e))?;
 
+        // Create a more interesting relation description
+        let relation_desc = format!("guardian of {}", child_name);
+
         self.world
-            .set(parent, has_child(child), "has_child")
+            .set(parent, has_child(child), relation_desc)
             .map_err(|e| format!("Failed to set has_child relation: {:?}", e))?;
 
         self.world.set(child, last_modified(), timestamp).ok();
@@ -592,11 +595,13 @@ impl ReplState {
             .get(entity)
         {
             let children: Vec<String> = has_child_relations
-                .map(|(child, _): (Entity, &&str)| {
-                    self.world
+                .map(|(child, rel_data): (Entity, &String)| {
+                    let child_name = self
+                        .world
                         .get(child, components::name())
                         .map(|n| n.clone())
-                        .unwrap_or_else(|_| format!("{:?}", child))
+                        .unwrap_or_else(|_| format!("{:?}", child));
+                    format!("{} ({})", child_name, rel_data)
                 })
                 .collect();
 
@@ -664,11 +669,13 @@ impl ReplState {
             .get(entity)
         {
             let children: Vec<String> = has_child_relations
-                .map(|(child, _): (Entity, &&str)| {
-                    self.world
+                .map(|(child, rel_data): (Entity, &String)| {
+                    let child_name = self
+                        .world
                         .get(child, components::name())
                         .map(|n| n.clone())
-                        .unwrap_or_else(|_| format!("{:?}", child))
+                        .unwrap_or_else(|_| format!("{:?}", child));
+                    format!("{} ({})", child_name, rel_data)
                 })
                 .collect();
 
