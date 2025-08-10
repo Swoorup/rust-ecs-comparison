@@ -81,11 +81,16 @@ pub enum Command {
     DeletePane { pane: PaneHandle },
 }
 
-fn create_pane_with_datasets(world: &mut World, dataset_ids: Vec<DatasetId>) -> PaneHandle {
+fn create_pane_with_datasets(
+    world: &mut World,
+    dataset_ids: Vec<DatasetId>,
+    width: u32,
+    height: u32,
+) -> PaneHandle {
     // Create the pane entity
     let pane_entity = Entity::builder()
-        .set(pane::width(), 100)
-        .set(pane::height(), 200)
+        .set(pane::width(), width)
+        .set(pane::height(), height)
         .spawn(world);
     let pane = PaneHandle::new(pane_entity);
 
@@ -150,7 +155,7 @@ fn process_commands_system() -> BoxedSystem {
             println!("[System] Processing {} commands", queue.len());
             // Note: In a real system, we'd need a way to access world here
             // This is a limitation we'd need to work around
-            for cmd in queue.drain(..) {
+            for (index, cmd) in queue.drain(..).enumerate() {
                 match cmd {
                     Command::CreatePaneWithDatasets { dataset_ids } => {
                         println!(
@@ -158,9 +163,9 @@ fn process_commands_system() -> BoxedSystem {
                             dataset_ids.len()
                         );
 
-                        cmdbuf.defer(|world| {
+                        cmdbuf.defer(move |world| {
 
-                        let pane_handle = create_pane_with_datasets(world, dataset_ids);
+                        let pane_handle = create_pane_with_datasets(world, dataset_ids, 100 * (index as u32 + 1), 200);
                         println!("[System] Created pane: {:?}", pane_handle);
                         Ok(())
                         });
@@ -287,8 +292,10 @@ pub fn main() {
             // Query relations: what datasets does this pane use?
             // Use relations_like to efficiently get all uses_dataset relations for this pane
             let mut this_pane_datasets = Vec::new();
-            let mut relation_query = Query::new(relations_like(pane::uses_dataset));
-            if let Ok(relations) = relation_query.borrow(&world).get(pane_entity) {
+            let mut relation_query =
+                Query::new((pane::width(), relations_like(pane::uses_dataset)));
+            if let Ok((width, relations)) = relation_query.borrow(&world).get(pane_entity) {
+                println!("  Width: {}", *width);
                 for (target, _) in relations {
                     this_pane_datasets.push(DatasetHandle::new(target));
                 }
