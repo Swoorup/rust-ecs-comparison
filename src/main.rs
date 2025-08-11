@@ -13,10 +13,50 @@ use rustyline::{Cmd, KeyEvent};
 use rustyline::{Context, Helper};
 use std::collections::HashMap;
 
+// Custom Mana struct with Drop implementation
+#[derive(Debug, Clone)]
+struct Mana {
+    current: i32,
+    maximum: i32,
+    entity_name: String,
+}
+
+impl Drop for Mana {
+    fn drop(&mut self) {
+        if self.current <= 0 {
+            println!(
+                "⚡ {} {}",
+                format!("{}'s mana has been completely depleted! The magical essence dissipates into the ether...", 
+                    self.entity_name).bright_magenta().italic(),
+                "✨".bright_cyan()
+            );
+        } else if self.current < self.maximum / 4 {
+            println!(
+                "🔮 {} {}",
+                format!("{}'s mana reserves are critically low ({}/{}), the arcane energy flickers weakly...", 
+                    self.entity_name, self.current, self.maximum).yellow().italic(),
+                "💫".bright_yellow()
+            );
+        } else {
+            println!(
+                "✨ {} {}",
+                format!(
+                    "{}'s remaining mana ({}/{}) returns to the cosmic pool...",
+                    self.entity_name, self.current, self.maximum
+                )
+                .bright_cyan()
+                .italic(),
+                "🌟".bright_blue()
+            );
+        }
+    }
+}
+
 component! {
     has_child(child): String,
     last_modified: f64,
     health: i32,
+    mana: Mana,
 }
 
 struct ReplState {
@@ -146,6 +186,8 @@ impl Completer for MyCompleter {
             "set-relation child",
             "remove-relation child",
             "set health",
+            "set mana",
+            "cast",
             "remove",
             "dump",
             "list",
@@ -264,7 +306,21 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                ["set", "health", partial] if !line_up_to_pos.ends_with(' ') => {
+                ["set", "health", partial] | ["set", "mana", partial]
+                    if !line_up_to_pos.ends_with(' ') =>
+                {
+                    start = pos - partial.len();
+                    for entity in &self.entity_names {
+                        if entity.starts_with(partial) {
+                            candidates.push(Pair {
+                                display: entity.clone(),
+                                replacement: entity.clone(),
+                            });
+                        }
+                    }
+                }
+                ["cast", _, partial] if !line_up_to_pos.ends_with(' ') => {
+                    // Autocomplete entity names for caster
                     start = pos - partial.len();
                     for entity in &self.entity_names {
                         if entity.starts_with(partial) {
@@ -505,6 +561,90 @@ impl ReplState {
         Ok(())
     }
 
+    fn set_mana(&mut self, name: &str, mana_value: i32) -> Result<(), String> {
+        let entity = self.get_entity(name)?;
+        let timestamp = self.get_current_time();
+
+        // Create a new Mana struct with the entity name
+        let mana_component = Mana {
+            current: mana_value,
+            maximum: mana_value,
+            entity_name: name.to_string(),
+        };
+
+        self.world
+            .set(entity, mana(), mana_component)
+            .map_err(|e| format!("Failed to set mana: {:?}", e))?;
+
+        self.world.set(entity, last_modified(), timestamp).ok();
+
+        Ok(())
+    }
+
+    fn cast_spell(
+        &mut self,
+        caster_name: &str,
+        spell_name: &str,
+        mana_cost: i32,
+    ) -> Result<(), String> {
+        let entity = self.get_entity(caster_name)?;
+        let timestamp = self.get_current_time();
+
+        // Get current mana
+        let mut mana_component = self
+            .world
+            .get(entity, mana())
+            .map_err(|_| format!("{} has no mana to cast spells!", caster_name))?
+            .clone();
+
+        if mana_component.current < mana_cost {
+            return Err(format!(
+                "{} doesn't have enough mana! (Required: {}, Current: {})",
+                caster_name, mana_cost, mana_component.current
+            ));
+        }
+
+        // Deduct mana
+        mana_component.current -= mana_cost;
+
+        // Update the mana component
+        self.world
+            .set(entity, mana(), mana_component.clone())
+            .map_err(|e| format!("Failed to update mana: {:?}", e))?;
+
+        self.world.set(entity, last_modified(), timestamp).ok();
+
+        // Print spell casting message
+        let spell_effect = match spell_name.to_lowercase().as_str() {
+            "fireball" => "🔥 A blazing fireball erupts from their hands!",
+            "heal" => "💚 Healing energy flows through the air!",
+            "lightning" => "⚡ Lightning crackles with raw power!",
+            "shield" => "🛡️ A protective barrier shimmers into existence!",
+            "teleport" => "🌀 Reality warps as they vanish and reappear!",
+            _ => "✨ Arcane energy swirls mysteriously!",
+        };
+
+        println!(
+            "{} {} casts {} for {} mana! {}",
+            "🪄".bright_magenta(),
+            caster_name.bright_cyan().bold(),
+            spell_name.bright_yellow().italic(),
+            mana_cost.to_string().bright_red(),
+            spell_effect.bright_blue()
+        );
+
+        if mana_component.current == 0 {
+            println!(
+                "{}",
+                format!("💀 {}'s mana is completely exhausted!", caster_name)
+                    .red()
+                    .bold()
+            );
+        }
+
+        Ok(())
+    }
+
     fn add_relation(&mut self, child_name: &str, parent_name: &str) -> Result<(), String> {
         let child = self.get_entity(child_name)?;
         let parent = self.get_entity(parent_name)?;
@@ -688,6 +828,27 @@ impl ReplState {
                 "  {} {}\n",
                 "Health:".bright_black(),
                 health_color
+            ));
+        }
+
+        if let Ok(mana_val) = self.world.get(entity, mana()) {
+            let mana_percentage =
+                (mana_val.current as f32 / mana_val.maximum as f32 * 100.0) as i32;
+            let mana_color = if mana_percentage > 75 {
+                format!("{}/{}", mana_val.current, mana_val.maximum).bright_blue()
+            } else if mana_percentage > 25 {
+                format!("{}/{}", mana_val.current, mana_val.maximum).blue()
+            } else {
+                format!("{}/{}", mana_val.current, mana_val.maximum).bright_magenta()
+            };
+            let mana_bar = "█".repeat((mana_percentage / 10).max(0) as usize);
+            let empty_bar = "░".repeat(10 - (mana_percentage / 10).max(0) as usize);
+            info.push_str(&format!(
+                "  {} {} [{}{}]\n",
+                "Mana:".bright_black(),
+                mana_color,
+                mana_bar.bright_blue(),
+                empty_bar.bright_black()
             ));
         }
 
@@ -894,6 +1055,14 @@ fn print_help() {
         "  {} - Set health value for an entity",
         "set health [name] [number]".green()
     );
+    println!(
+        "  {} - Set mana value for an entity",
+        "set mana [name] [number]".green()
+    );
+    println!(
+        "  {} - Cast a spell consuming mana",
+        "cast [spell] [caster] [cost]".green()
+    );
     println!("  {} - Remove an entity", "remove [name]".green());
     println!("  {} - Show all recent changes", "dump".green());
     println!("  {} - Show recently added entities", "dump added".green());
@@ -1062,6 +1231,43 @@ fn main() -> rustyline::Result<()> {
                             number_str.red()
                         ),
                     },
+                    ["set", "mana", name, number_str] => match number_str.parse::<i32>() {
+                        Ok(mana_value) => match state.set_mana(name, mana_value) {
+                            Ok(_) => {
+                                println!(
+                                    "{} {} now has {} mana! {}",
+                                    "✓".green().bold(),
+                                    name.bright_cyan(),
+                                    mana_value.to_string().bright_blue(),
+                                    "🔮".bright_magenta()
+                                );
+                            }
+                            Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
+                        },
+                        Err(_) => println!(
+                            "{} Invalid mana value '{}', must be a number",
+                            "✗".red().bold(),
+                            number_str.red()
+                        ),
+                    },
+                    ["cast", spell_name, "by", caster_name, "for", cost_str]
+                    | ["cast", spell_name, caster_name, cost_str] => {
+                        match cost_str.parse::<i32>() {
+                            Ok(mana_cost) => {
+                                match state.cast_spell(caster_name, spell_name, mana_cost) {
+                                    Ok(_) => {
+                                        // Success message is printed in cast_spell method
+                                    }
+                                    Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
+                                }
+                            }
+                            Err(_) => println!(
+                                "{} Invalid mana cost '{}', must be a number",
+                                "✗".red().bold(),
+                                cost_str.red()
+                            ),
+                        }
+                    }
                     ["dump"] => {
                         state.dump_changes(None);
                     }
