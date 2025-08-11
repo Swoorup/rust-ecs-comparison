@@ -1,6 +1,7 @@
 use colored::*;
 use flax::system::BoxedSystem;
 use flax::*;
+use flax::{Dfs, Topo};
 use rustyline::Editor;
 use rustyline::completion::{Completer, Pair};
 use rustyline::config::{Config, EditMode};
@@ -148,6 +149,9 @@ impl Completer for MyCompleter {
             "remove",
             "dump",
             "list",
+            "tree",
+            "tree dfs",
+            "tree topo",
             "help",
             "quit",
             "exit",
@@ -202,6 +206,15 @@ impl Completer for MyCompleter {
                         replacement: "entity".to_string(),
                     });
                 }
+                "tree" => {
+                    start = pos;
+                    for mode in &["dfs", "topo"] {
+                        candidates.push(Pair {
+                            display: mode.to_string(),
+                            replacement: mode.to_string(),
+                        });
+                    }
+                }
                 _ => {}
             }
         } else if parts.len() == 2 && !line_up_to_pos.ends_with(' ') {
@@ -215,6 +228,18 @@ impl Completer for MyCompleter {
                             candidates.push(Pair {
                                 display: subcmd.to_string(),
                                 replacement: subcmd.to_string(),
+                            });
+                        }
+                    }
+                }
+                "tree" => {
+                    let partial = parts[1];
+                    start = pos - partial.len();
+                    for mode in &["dfs", "topo"] {
+                        if mode.starts_with(partial) {
+                            candidates.push(Pair {
+                                display: mode.to_string(),
+                                replacement: mode.to_string(),
                             });
                         }
                     }
@@ -261,8 +286,9 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                ["set-relation", "child", partial] | ["remove-relation", "child", partial] 
-                    if !line_up_to_pos.ends_with(' ') => {
+                ["set-relation", "child", partial] | ["remove-relation", "child", partial]
+                    if !line_up_to_pos.ends_with(' ') =>
+                {
                     start = pos - partial.len();
                     for entity in &self.entity_names {
                         if entity.starts_with(partial) {
@@ -273,8 +299,8 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                ["set-relation", "child", _, "parent", partial] | 
-                ["remove-relation", "child", _, "parent", partial]
+                ["set-relation", "child", _, "parent", partial]
+                | ["remove-relation", "child", _, "parent", partial]
                     if !line_up_to_pos.ends_with(' ') =>
                 {
                     start = pos - partial.len();
@@ -714,6 +740,136 @@ impl ReplState {
 
         Ok(info)
     }
+
+    fn show_tree(&self, mode: &str) {
+        println!(
+            "\n{}",
+            format!("=== {} Tree View ===", mode.to_uppercase())
+                .cyan()
+                .bold()
+        );
+
+        match mode {
+            "dfs" => self.show_dfs_tree(),
+            "topo" => self.show_topo_tree(),
+            _ => println!("{}", "Invalid tree mode. Use 'dfs' or 'topo'".red()),
+        }
+
+        println!("{}\n", "========================".bright_black());
+    }
+
+    fn show_dfs_tree(&self) {
+        // Use Flax's built-in DFS traversal
+        let mut query = Query::new((entity_ids(), components::name()))
+            .with_strategy(Dfs::new(components::child_of));
+
+        println!("{}", "DFS Traversal (depth-first search):".green().bold());
+
+        for (entity, name) in query.borrow(&self.world).iter() {
+            // Calculate depth by tracking parent chain
+            let mut depth = 0;
+            let mut current = entity;
+
+            while let Ok(mut child_of_relations) = Query::new(relations_like(components::child_of))
+                .with_relation(components::child_of)
+                .borrow(&self.world)
+                .get(current)
+            {
+                if let Some((parent, _)) = child_of_relations.next() {
+                    depth += 1;
+                    current = parent;
+                } else {
+                    break;
+                }
+            }
+
+            let indent = "  ".repeat(depth);
+            let connector = if depth > 0 { "└─ " } else { "" };
+
+            // Get health info if available
+            let health_str = if let Ok(health_val) = self.world.get(entity, health()) {
+                let health_color = if *health_val > 75 {
+                    format!(" [Health: {}]", *health_val).green()
+                } else if *health_val > 30 {
+                    format!(" [Health: {}]", *health_val).yellow()
+                } else {
+                    format!(" [Health: {}]", *health_val).red()
+                };
+                health_color.to_string()
+            } else {
+                String::new()
+            };
+
+            println!(
+                "{}{}{} ({}){}",
+                indent.bright_black(),
+                connector.bright_black(),
+                name.bright_cyan(),
+                format!("{:?}", entity).bright_magenta(),
+                health_str
+            );
+        }
+    }
+
+    fn show_topo_tree(&self) {
+        // Use Flax's built-in topological traversal
+        let mut query = Query::new((entity_ids(), components::name()))
+            .with_strategy(Topo::new(components::child_of));
+
+        println!(
+            "{}",
+            "Topological Sort (parents before children):".green().bold()
+        );
+
+        for (entity, name) in query.borrow(&self.world).iter() {
+            // Get health info if available
+            let health_str = if let Ok(health_val) = self.world.get(entity, health()) {
+                let health_color = if *health_val > 75 {
+                    format!(" [Health: {}]", *health_val).green()
+                } else if *health_val > 30 {
+                    format!(" [Health: {}]", *health_val).yellow()
+                } else {
+                    format!(" [Health: {}]", *health_val).red()
+                };
+                health_color.to_string()
+            } else {
+                String::new()
+            };
+
+            // Show parent relationships inline
+            let parent_str = if let Ok(child_of_relations) =
+                Query::new(relations_like(components::child_of))
+                    .with_relation(components::child_of)
+                    .borrow(&self.world)
+                    .get(entity)
+            {
+                let parents: Vec<String> = child_of_relations
+                    .map(|(parent, _)| {
+                        self.world
+                            .get(parent, components::name())
+                            .map(|n| n.clone())
+                            .unwrap_or_else(|_| format!("{:?}", parent))
+                    })
+                    .collect();
+
+                if !parents.is_empty() {
+                    format!(" ← {}", parents.join(", ")).yellow().to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            println!(
+                "  • {} ({}){}{}",
+                name.bright_cyan(),
+                format!("{:?}", entity).bright_magenta(),
+                health_str,
+                parent_str
+            );
+        }
+    }
 }
 
 fn print_help() {
@@ -750,6 +906,10 @@ fn print_help() {
         "dump removed".green()
     );
     println!("  {} - List all entities", "list".green());
+    println!(
+        "  {} - Show entity tree with DFS traversal",
+        "tree [dfs|topo]".green()
+    );
     println!("  {} - Show this help message", "help".green());
     println!("  {} - Exit the REPL", "quit".green());
 }
@@ -928,6 +1088,13 @@ fn main() -> rustyline::Result<()> {
                                 );
                             }
                         }
+                    }
+                    ["tree", mode] => {
+                        state.show_tree(mode);
+                    }
+                    ["tree"] => {
+                        // Default to DFS if no mode specified
+                        state.show_tree("dfs");
                     }
                     _ => {
                         println!("{} Unknown command: '{}'", "⚠".yellow().bold(), input.red());
