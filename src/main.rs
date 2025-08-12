@@ -752,6 +752,31 @@ impl ReplState {
                 // Then show its relations
                 self.display_entity_relations(entity);
             });
+        
+        // Show entities without any relationships using without_relation
+        println!();
+        println!("{}", "  Entities without relationships:".bright_black().bold());
+        
+        let mut orphan_query = Query::new((entity_ids(), components::name()))
+            .without_relation(components::child_of)
+            .without_relation(has_child);
+            
+        let mut query_borrow = orphan_query.borrow(&self.world);
+        let orphaned_entities: Vec<_> = query_borrow.iter().collect();
+            
+        if orphaned_entities.is_empty() {
+            println!("{}", "    (All entities have relationships)".bright_black().italic());
+        } else {
+            for (entity, name) in orphaned_entities {
+                println!(
+                    "    {} {} ({}) - {}",
+                    "•".bright_black(),
+                    name.bright_white(),
+                    format!("{:?}", entity).bright_magenta(),
+                    "standalone entity".bright_black().italic()
+                );
+            }
+        }
     }
 
     fn display_entity_relations(&self, entity: Entity) {
