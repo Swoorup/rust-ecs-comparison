@@ -184,16 +184,17 @@ impl Completer for MyCompleter {
             "add entity",
             "get",
             "set-relation child",
-            "remove-relation child",
+            "rm-relation child",
             "set health",
             "set mana",
             "cast",
-            "remove",
+            "rm",
             "dump",
             "list",
             "tree",
             "tree dfs",
             "tree topo",
+            "echo",
             "help",
             "quit",
             "exit",
@@ -234,7 +235,7 @@ impl Completer for MyCompleter {
                         });
                     }
                 }
-                "set-relation" | "remove-relation" => {
+                "set-relation" | "rm-relation" => {
                     start = pos;
                     candidates.push(Pair {
                         display: "child".to_string(),
@@ -331,7 +332,7 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                ["remove", partial] if !line_up_to_pos.ends_with(' ') => {
+                ["rm", partial] if !line_up_to_pos.ends_with(' ') => {
                     start = pos - partial.len();
                     for entity in &self.entity_names {
                         if entity.starts_with(partial) {
@@ -342,7 +343,7 @@ impl Completer for MyCompleter {
                         }
                     }
                 }
-                ["set-relation", "child", partial] | ["remove-relation", "child", partial]
+                ["set-relation", "child", partial] | ["rm-relation", "child", partial]
                     if !line_up_to_pos.ends_with(' ') =>
                 {
                     start = pos - partial.len();
@@ -356,7 +357,7 @@ impl Completer for MyCompleter {
                     }
                 }
                 ["set-relation", "child", _, "parent", partial]
-                | ["remove-relation", "child", _, "parent", partial]
+                | ["rm-relation", "child", _, "parent", partial]
                     if !line_up_to_pos.ends_with(' ') =>
                 {
                     start = pos - partial.len();
@@ -770,7 +771,7 @@ impl ReplState {
             for (entity, name) in orphaned_entities {
                 println!(
                     "    {} {} ({}) - {}",
-                    "•".bright_black(),
+                    format!("{}.", entity.index()).bright_black(),
                     name.bright_white(),
                     format!("{:?}", entity).bright_magenta(),
                     "standalone entity".bright_black().italic()
@@ -1074,7 +1075,7 @@ fn print_help() {
     );
     println!(
         "  {} - Remove a parent-child relation",
-        "remove-relation child [name] parent [name]".green()
+        "rm-relation child [name] parent [name]".green()
     );
     println!(
         "  {} - Set health value for an entity",
@@ -1088,7 +1089,7 @@ fn print_help() {
         "  {} - Cast a spell consuming mana",
         "cast [spell] [caster] [cost]".green()
     );
-    println!("  {} - Remove an entity", "remove [name]".green());
+    println!("  {} - Remove an entity", "rm [name]".green());
     println!("  {} - Show all recent changes", "dump".green());
     println!("  {} - Show recently added entities", "dump added".green());
     println!(
@@ -1103,6 +1104,10 @@ fn print_help() {
     println!(
         "  {} - Show entity tree with DFS traversal",
         "tree [dfs|topo]".green()
+    );
+    println!(
+        "  {} - Print a message to the console",
+        "echo [message]".green()
     );
     println!("  {} - Show this help message", "help".green());
     println!("  {} - Exit the REPL", "quit".green());
@@ -1156,7 +1161,7 @@ fn main() -> rustyline::Result<()> {
         match readline {
             Ok(line) => {
                 let input = line.trim();
-                if input.is_empty() {
+                if input.is_empty() || input.starts_with('#') {
                     continue;
                 }
                 rl.add_history_entry(input).ok();
@@ -1186,7 +1191,7 @@ fn main() -> rustyline::Result<()> {
                         Ok(info) => print!("{}", info),
                         Err(e) => println!("{} {}", "✗".red().bold(), e.red()),
                     },
-                    ["remove", name] => match state.remove_entity(name) {
+                    ["rm", name] => match state.remove_entity(name) {
                         Ok(_) => {
                             println!(
                                 "{} Removed entity '{}'",
@@ -1212,7 +1217,7 @@ fn main() -> rustyline::Result<()> {
                         }
                     }
                     [
-                        "remove-relation",
+                        "rm-relation",
                         "child",
                         child_name,
                         "parent",
@@ -1326,6 +1331,11 @@ fn main() -> rustyline::Result<()> {
                     ["tree"] => {
                         // Default to DFS if no mode specified
                         state.show_tree("dfs");
+                    }
+                    ["echo", message @ ..] => {
+                        // Join all the remaining parts as the message
+                        let full_message = message.join(" ");
+                        println!("{}", full_message.bright_white());
                     }
                     _ => {
                         println!("{} Unknown command: '{}'", "⚠".yellow().bold(), input.red());
